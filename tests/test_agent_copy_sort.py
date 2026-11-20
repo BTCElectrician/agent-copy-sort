@@ -1348,6 +1348,21 @@ class DemoPageTest(unittest.TestCase):
         assert_no_network(self, hosted.replace(render_demo.SITE_STRIP, ''))
         self.assertTrue((site.parent / '.nojekyll').exists(), 'GitHub Pages must serve the file as it is')
 
+    def test_background_is_drawn_with_gradients_only_in_both_themes(self):
+        for page in (self.page, self.share):
+            style = page.split('<style>', 1)[1].split('</style>', 1)[0]
+            self.assertIn('body::before', style)
+            self.assertIn('radial-gradient(var(--dot) 1px', style)
+            # Light value once, dark value under the system setting and again under the explicit dark theme.
+            for token in ('--glow:', '--glow2:', '--dot:'):
+                self.assertEqual(style.count(token), 3, token)
+            # No picture behind it: nothing to fetch and nothing embedded.
+            for mark in ('url(', 'data:', '<img', 'image-set('):
+                self.assertNotIn(mark, page)
+            # The pattern can never catch a click or sit above the content.
+            self.assertIn('pointer-events:none;z-index:0', style)
+            self.assertIn('position:relative;z-index:1}', style)
+
     def pure_helpers(self, expression):
         """Run the page script's own pure helpers (sizes, changes, strip labels) in node; return the result."""
         js = self.page.split('<script>', 1)[1].rsplit('</script>', 1)[0]
