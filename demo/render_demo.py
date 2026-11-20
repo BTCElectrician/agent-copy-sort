@@ -4,6 +4,7 @@
     python3 demo/render_demo.py                 # writes demo/out/demo-report.html
     python3 demo/render_demo.py --redact        # also writes the shareable copy
     python3 demo/render_demo.py --out some.html
+    python3 demo/render_demo.py --site          # rewrites docs/index.html, the hosted live demo
 
 Nothing on this computer is scanned and no history file is read or written:
 every project, name, chat title, path and number comes from demo-scan.json,
@@ -78,13 +79,35 @@ def build(acs, data=None):
     return report, acs.clean_history(history, now)
 
 
+REPO_URL = 'https://github.com/BTCElectrician/agent-copy-sort'
+SITE_STYLE = ('<style>.site-strip{font-size:15.5px;padding:11px 16px;border:1px solid var(--rule);border-radius:6px;'
+              'max-width:none}.site-strip a{font-weight:650;text-underline-offset:3px}</style>\n')
+SITE_STRIP = ('<p class="site-strip"><b>Live demo.</b> This is the page agent-copy-sort writes after a scan. Every '
+              f'project, name and number on it is invented. <a href="{REPO_URL}">Get the skill on GitHub</a></p>\n')
+
+
+def site_page(acs, report, history):
+    """The hosted live demo: the tool's own page, plus one strip at the top that
+    says the data is invented and links to the repository. Nothing else differs."""
+    page = acs.render_html(report, history=history)
+    head, wrap = '</head><body>\n', '<div class="wrap">\n'
+    assert page.count(head) == 1 and page.count(wrap) == 1
+    return page.replace(head, SITE_STYLE + head).replace(wrap, wrap + SITE_STRIP)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', default=str(HERE / 'out' / 'demo-report.html'), help='where to write the page')
     ap.add_argument('--redact', action='store_true', help='also write the shareable copy next to it')
+    ap.add_argument('--site', action='store_true', help='rewrite docs/index.html, the hosted live demo, and stop')
     args = ap.parse_args(argv)
     acs = load_tool()
     report, history = build(acs)
+    if args.site:
+        site = HERE.parent / 'docs' / 'index.html'
+        site.write_text(site_page(acs, report, history))
+        print(f'live demo page: {site}')
+        return 0
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(acs.render_html(report, history=history))
