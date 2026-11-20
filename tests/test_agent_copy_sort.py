@@ -1335,6 +1335,19 @@ class DemoPageTest(unittest.TestCase):
                 res = subprocess.run(['node', '--check', str(js)], capture_output=True, text=True)  # ubs:ignore -- argv list
                 self.assertEqual(res.returncode, 0, res.stderr)
 
+    def test_hosted_live_demo_is_the_tools_page_plus_one_strip(self):
+        site = Path(__file__).parents[1] / 'docs' / 'index.html'
+        hosted = site.read_text()
+        self.assertEqual(hosted, render_demo.site_page(acs, self.report, self.history),
+                         'docs/index.html is stale: run python3 demo/render_demo.py --site')
+        self.assertEqual(hosted.replace(render_demo.SITE_STYLE, '').replace(render_demo.SITE_STRIP, ''), self.page)
+        # The one outside address on the hosted page is the link back to the repository; nothing is loaded.
+        self.assertEqual(hosted.count('https://'), 1)
+        self.assertEqual(hosted.count('http://'), 0)
+        self.assertIn(f'<a href="{render_demo.REPO_URL}">', hosted)
+        assert_no_network(self, hosted.replace(render_demo.SITE_STRIP, ''))
+        self.assertTrue((site.parent / '.nojekyll').exists(), 'GitHub Pages must serve the file as it is')
+
     def test_demo_script_writes_both_pages(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / 'demo.html'

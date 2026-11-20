@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Agent Copy Sort</title>
+<style>
+/* Layout: one report on one surface. The answer first (what can go and how much comes back), then the disk drawn
+   to scale with the agent copies magnified so every copy is a block, then the trend, the reasons and every copy.
+   Color belongs to the four groups and to nothing else. */
+:root{
+ --bg:#ffffff;--ink:#111a24;--ink2:#2b3644;--rule:#c9d1db;--hair:#e4e9ef;--band:#eef2f6;--axis:#8793a2;
+ --other:#a9b4c1;--wedge:#f0f3f7;--tipbg:#111a24;--tipfg:#ffffff;--focus:#1d4c96;--hit:#fff1c9;
+ --g-inuse:#e34948;--g-recent:#eda100;--g-decide:#2a78d6;--g-done:#1baf7a;
+ --body:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161d;--ink:#f1f4f8;--ink2:#d6dde6;--rule:#3a4757;--hair:#232d39;--band:#1a222d;--axis:#77879a;--other:#566373;--wedge:#1a222d;--tipbg:#f1f4f8;--tipfg:#11161d;--focus:#9ec0ff;--hit:#3a3113;--g-recent:#c98500;--g-decide:#3987e5;--g-done:#199e70;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11161d;--ink:#f1f4f8;--ink2:#d6dde6;--rule:#3a4757;--hair:#232d39;--band:#1a222d;--axis:#77879a;--other:#566373;--wedge:#1a222d;--tipbg:#f1f4f8;--tipfg:#11161d;--focus:#9ec0ff;--hit:#3a3113;--g-recent:#c98500;--g-decide:#3987e5;--g-done:#199e70;color-scheme:dark}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;margin:0}
+.wrap{max-width:1080px;margin:0 auto;padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:48px}
+h1{font-weight:650;font-size:clamp(28px,4.6vw,40px);line-height:1.12;letter-spacing:-.01em;margin:0;text-wrap:balance}
+h2{font-weight:650;font-size:clamp(20px,2.6vw,24px);line-height:1.25;margin:0;text-wrap:balance}
+h3{font-weight:650;font-size:17px;line-height:1.3;margin:0}
+p{margin:0;max-width:70ch}
+ul{margin:0;padding-left:20px}
+li{font-size:15px;overflow-wrap:anywhere}
+a{color:inherit}
+code{font-family:var(--mono);font-size:14px;overflow-wrap:anywhere}
+[hidden]{display:none!important}
+.g-inuse{--c:var(--g-inuse)}.g-recent{--c:var(--g-recent)}.g-decide{--c:var(--g-decide)}.g-done{--c:var(--g-done)}
+header{display:flex;flex-direction:column;gap:14px}
+.eyebrow{font-size:14.5px;font-weight:500;color:var(--ink2)}
+.hero{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 22px}
+.fig{font-size:clamp(54px,12vw,88px);font-weight:700;line-height:1;letter-spacing:-.03em;white-space:nowrap}
+.fig small{font-size:.26em;font-weight:600;letter-spacing:0;margin-right:.4em}
+.figcap{flex:1 1 300px;font-size:16px;color:var(--ink2);max-width:56ch;padding-bottom:5px}
+.lead{font-size:17px}
+.private{background:var(--band);border-left:4px solid var(--ink);border-radius:0 6px 6px 0;padding:12px 16px;font-size:15px;max-width:none}
+section{display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-top:16px}
+.sec{border-top:1px solid var(--rule);padding-top:22px}
+.note{font-size:15.5px;color:var(--ink2)}
+.cap{font-size:14.5px;color:var(--ink2)}
+.key{display:inline-block;width:11px;height:11px;border-radius:2px;background:var(--c);margin-right:8px;flex:none}
+.scale{display:flex;flex-direction:column;min-width:0}
+.ends{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 20px;font-size:14.5px;color:var(--ink2);margin-bottom:6px}
+.ends b,.runlabels b{color:var(--ink);font-weight:650}
+.strip{display:flex;gap:2px;height:14px}
+.strip .seg{min-width:0;height:100%}
+.strip .other{background:var(--other);border-radius:4px 0 0 4px}
+.strip .cps{display:flex;min-width:4px}
+.strip .cps i{display:block;height:100%;background:var(--c);min-width:0}
+.strip .free{border:1px solid var(--axis);border-radius:0 4px 4px 0;min-width:3px}
+.wedge{display:block;width:100%;height:42px}
+.wedge polygon{fill:var(--wedge)}
+.wedge line{stroke:var(--rule);stroke-width:1}
+.runlabels{position:relative;height:28px;font-size:14.5px;color:var(--ink2)}
+.runlabels span{position:absolute;bottom:5px;white-space:nowrap}
+.mag{display:flex;gap:2px;height:34px}
+.blk{background:var(--c);min-width:2px;height:100%;cursor:pointer}
+.blk.many{opacity:.5}
+.blk:first-child,.sg:first-child:last-child{border-top-left-radius:0}
+.mag .blk:first-child{border-radius:4px 0 0 4px}
+.mag .blk:last-child{border-radius:0 4px 4px 0}
+.mag .blk:first-child:last-child{border-radius:4px}
+.blk:hover,.sg:hover,.strip .seg:hover{filter:brightness(1.12)}
+.ann{position:relative;padding-top:18px;min-height:20px}
+.brk{position:absolute;top:5px;height:8px;min-width:6px;border:solid var(--ink);border-width:0 1.5px 1.5px}
+.anntext{text-align:right;font-size:15.5px;font-weight:650;max-width:none}
+.tablewrap{overflow-x:auto;min-width:0}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th{font-size:14px;font-weight:600;color:var(--ink);text-align:left;background:var(--band);padding:9px 12px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--hair);vertical-align:top;font-size:15.5px}
+.num{text-align:right;white-space:nowrap}
+.summary td:first-child{font-weight:650}
+.summary a{text-decoration:none}
+.summary a:hover{text-decoration:underline}
+.plot{display:block;max-width:100%;touch-action:pan-y;overflow:visible}
+.plot text{font-family:var(--body);font-size:14.5px;fill:var(--ink2)}
+.plot .strong{fill:var(--ink);font-weight:650}
+.plot .grid{stroke:var(--hair);stroke-width:1}
+.plot .base{stroke:var(--axis);stroke-width:1}
+.plot .ln{fill:none;stroke:var(--axis);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.plot .ln.em{stroke:var(--ink);stroke-width:2.5}
+.plot .gl{fill:none;stroke:var(--c);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.plot .wash{fill:var(--c);opacity:.12}
+.plot .dot{fill:var(--ink);stroke:var(--bg);stroke-width:2}
+.plot .gdot{fill:var(--c);stroke:var(--bg);stroke-width:2}
+.plot .cross{stroke:var(--axis);stroke-width:1}
+.plot .ring{fill:none;stroke:var(--ink);stroke-width:2}
+.plot .pt{fill:var(--c);stroke:var(--bg);stroke-width:1.5}
+.plot .lead{stroke:var(--axis);stroke-width:1}
+.mults{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px 28px;margin-top:10px}
+.mult{display:flex;flex-direction:column;gap:4px;min-width:0}
+.mtitle{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:0 8px;font-size:14.5px;color:var(--ink2)}
+.mtitle b{color:var(--ink);font-weight:650}
+.rows{display:flex;flex-direction:column;gap:9px}
+.row{display:grid;grid-template-columns:minmax(0,15.5rem) minmax(0,1fr) 9.5rem;gap:4px 14px;align-items:center}
+.rl{font-size:15px;min-width:0;overflow-wrap:anywhere}
+.rv{font-size:15px;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.track{height:14px;min-width:0;display:flex}
+.stack .row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"l v" "t t"}
+.stack .rl{grid-area:l}.stack .rv{grid-area:v}.stack .track{grid-area:t;margin-bottom:6px}
+.run{display:flex;gap:2px;height:100%;min-width:2px}
+.sg{background:var(--c);min-width:2px;height:100%;flex-basis:0}
+.sg:last-child{border-radius:0 4px 4px 0}
+.legend{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14.5px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center}
+.legend svg{margin-right:7px;flex:none}
+.legend path{fill:var(--c)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:48px 44px}
+details.tv>summary{cursor:pointer;font-size:14.5px;color:var(--ink2);width:max-content;max-width:100%;padding:4px 0;text-decoration:underline;text-underline-offset:3px}
+details.tv[open]>summary{margin-bottom:8px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%}
+.ctl select,.ctl input{min-width:0}
+.controls label{font-size:15px;font-weight:600}
+select,input{font:inherit;font-size:16px;color:var(--ink);background:var(--bg);border:1px solid var(--axis);border-radius:6px;padding:8px 10px;max-width:100%}
+#groups{display:flex;flex-direction:column;gap:36px}
+.grp{scroll-margin-top:16px}
+.grp>summary{list-style:none;cursor:pointer;margin-bottom:12px;border-radius:4px}
+.grp>summary::-webkit-details-marker{display:none}
+.grp>summary h3::after{content:"";width:8px;height:8px;margin-left:12px;border:solid var(--ink2);border-width:0 2px 2px 0;transform:translateY(-3px) rotate(45deg);flex:none;align-self:center}
+.grp:not([open])>summary h3::after{transform:rotate(-45deg)}
+.grp:not([open])>summary{margin-bottom:0}
+.ghead{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px}
+.ghead h3{font-size:19px;display:flex;align-items:baseline}
+.ghead .meta{font-size:15px;font-weight:650}
+.ghead .act{font-size:15px;color:var(--ink2);flex-basis:100%}
+.name{font-weight:650;overflow-wrap:anywhere}
+.sub{color:var(--ink2);font-size:14.5px;margin-top:3px;overflow-wrap:anywhere}
+.copies{table-layout:fixed;min-width:640px}
+.w-name{width:27%}.w-size{width:118px}.w-age{width:132px}
+.sz{width:92px;margin-left:auto}
+.szbar{height:4px;margin-top:6px;background:var(--c);border-radius:0 2px 2px 0;min-width:1px}
+tr.hit td{background:var(--hit)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:26px 40px}
+.notes>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.notes p,.plain p{font-size:15.5px}
+.meter{display:flex;height:10px;border-radius:5px;background:var(--hair);overflow:hidden;max-width:520px}
+.meter i{display:block;background:var(--ink2)}
+.foot{font-size:14.5px;color:var(--ink2);max-width:none}
+#tip{position:fixed;left:0;top:0;z-index:30;pointer-events:none;background:var(--tipbg);color:var(--tipfg);font-size:14.5px;line-height:1.4;padding:9px 11px;border-radius:6px;max-width:min(320px,calc(100vw - 16px));box-shadow:0 6px 20px rgba(0,0,0,.25);overflow-wrap:anywhere}
+#tip .tt{font-weight:650}
+a:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,tr:focus-visible,.plot:focus-visible,.blk:focus-visible,.sg:focus-visible,.seg:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.blk:focus-visible,.sg:focus-visible,.seg:focus-visible{position:relative;z-index:1}
+@media (max-width:680px){
+ .wrap{gap:40px}
+ .mults{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"l v" "t t"}
+ .row .rl{grid-area:l}.row .rv{grid-area:v}.row .track{grid-area:t;margin-bottom:6px}
+ .summary thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .summary tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 14px;padding:11px 0;border-bottom:1px solid var(--hair)}
+ .summary td{display:block;padding:0;border:0}
+ .summary td:last-child{grid-column:1/-1;color:var(--ink2);font-size:15px}
+ .copies{table-layout:auto;min-width:0}
+ .copies colgroup{display:none}
+ .copies thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .copies tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;padding:13px 0;border-bottom:1px solid var(--hair)}
+ .copies td{display:block;padding:0;border:0}
+ .copies .c-size{grid-column:2;grid-row:1}
+ .copies .c-why,.copies .c-age,.copies .c-none{grid-column:1/-1;min-width:0}
+ .copies .c-age{text-align:left;color:var(--ink2);font-size:14.5px}
+ .copies .c-age::before{content:"Last touched "}
+ .sz{width:auto}.szbar{display:none}
+}
+@media (prefers-reduced-motion:no-preference){.blk,.sg,.seg{transition:filter .12s}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+@media (forced-colors:active){.blk,.sg,.key,.strip .seg,.strip .cps i,.meter i{forced-color-adjust:none}}
+</style>
+<style>.site-strip{font-size:15.5px;padding:11px 16px;border:1px solid var(--rule);border-radius:6px;max-width:none}.site-strip a{font-weight:650;text-underline-offset:3px}</style>
+</head><body>
+<div class="wrap">
+<p class="site-strip"><b>Live demo.</b> This is the page agent-copy-sort writes after a scan. Every project, name and number on it is invented. <a href="https://github.com/BTCElectrician/agent-copy-sort">Get the skill on GitHub</a></p>
+<header>
+ <p class="eyebrow">Agent working copies · scanned 2026-11-20 09:30 CST</p>
+ <h1>16 finished copies can come off this disk</h1>
+ <div class="hero"><div class="fig"><small>up to</small>9.6 GB</div><p class="figcap">is what they take, out of 26.7 GB in all 41 copies. That is a folder-size count, not exact reclaimable bytes: copies of one project can share storage, so less may come back. Each one is checked again, live, before it is removed.</p></div>
+ <p class="lead">Claude Code, Codex and Cursor make a separate copy of a project for each task. This scan checked 41 copies and sorted them into four groups. No working copy was changed.</p>
+ <p class="private"><b>Private to this computer.</b> This page lists folder paths, chat titles, branch and file names from this machine, including rows hidden by the filters. Do not post, upload or send it. For sharing, make the shareable copy (<code>scan --redact</code>), which removes them.</p>
+</header>
+<noscript><p class="private">The charts and tables on this page are drawn by a script inside this file, and scripts are turned off here. The scan plan file beside this page holds the same data.</p></noscript>
+
+<section id="scale-sec" aria-labelledby="scale-h">
+ <h2 id="scale-h">Agent copies hold 26.7 GB, 5.8% of this disk</h2>
+ <div class="scale" id="scale"></div>
+ <p class="cap" id="scale-cap"></p>
+ <div class="tablewrap"><table class="summary">
+ <thead><tr><th scope="col">Group</th><th class="num" scope="col">Copies</th><th class="num" scope="col">Space</th><th scope="col">What to do</th></tr></thead>
+ <tbody id="sum"></tbody></table></div>
+</section>
+<section class="sec" id="time-sec" aria-labelledby="time-h">
+ <h2 id="time-h">Free space at each scan</h2>
+ <p class="note" id="time-note"></p>
+ <div id="timeline"></div>
+ <div class="mults" id="multiples"></div>
+ <p class="cap" id="mult-cap"></p>
+ <details class="tv" id="time-tv"></details>
+ <p class="cap">These points come from a private history file in this tool&#39;s state folder on this computer. It holds numbers only (free space and group totals per scan), keeps at most 400 scans, and is left out of the shareable copy. <code>scan --no-history</code> turns it off.</p>
+</section>
+<section class="sec" id="why-sec" aria-labelledby="why-h">
+ <h2 id="why-h">What holds the &#8220;your call&#8221; copies</h2>
+ <p class="note">Each bar is the space held by copies with that reason, largest first. One copy can have more than one reason, so the bars overlap and do not add up. Clear the reason (commit and push, or deal with the leftover files) and the next scan can move the copy to finished.</p>
+ <div id="reasons"></div>
+ <details class="tv" id="why-tv"></details>
+</section>
+<div class="two sec">
+<section id="proj-sec" aria-labelledby="proj-h">
+ <h2 id="proj-h">Copies by project</h2>
+ <p class="note" id="proj-note">Space each project&#39;s copies take, split by group.</p>
+ <div class="legend" id="proj-lg"></div>
+ <div id="byproj"></div>
+ <details class="tv" id="proj-tv"></details>
+</section>
+<section id="age-sec" aria-labelledby="age-h">
+ <h2 id="age-h">Size against age</h2>
+ <p class="note" id="age-note"></p>
+ <div class="legend" id="age-lg"></div>
+ <div id="scatter"></div>
+ <details class="tv" id="age-tv"></details>
+</section>
+</div>
+<section class="sec" id="list-sec" aria-labelledby="list-h">
+ <h2 id="list-h">Every copy, and why it is where it is</h2>
+ <div class="controls">
+  <span class="ctl"><label for="proj">Project</label><select id="proj"><option value="">All projects</option></select></span>
+  <span class="ctl"><label for="q">Search</label><input id="q" type="search" placeholder="name, chat or reason"></span>
+  <span class="ctl"><label for="sort">Sort</label><select id="sort"><option value="size">Largest first</option><option value="age">Longest untouched first</option><option value="name">Name</option></select></span>
+ </div>
+ <div id="groups"></div>
+</section>
+<section class="sec notes" aria-label="How to read this page">
+ <div><h3>How a copy was judged</h3><p>A copy is <b>in use</b> if a program has its working folder or an open file inside it, or its open chat was active in the last day and it has unsaved files or an open pull request. <b>Active</b> means its chat or its git history moved in the last 4 days. It is <b>finished</b> only when nothing in it exists only here (unsaved, untracked or ignored files, local-only commits, tags or reflog entries) and its work is on a remote. Anything unclear, and any check that failed, goes to <b>your call</b>. Removal checks each copy again, including the live remote.</p></div>
+ <div><h3>How sure these numbers are</h3><p>Counts and groups are exact for the moment of the scan. Sizes come from a folder-size count (1 GB = 1,024 MB): good for comparing copies, and an upper limit on space you get back, because copies of the same project can share storage, so removing one may free less than its listed size. Free space is what the system reported at scan time, on its own scale (macOS counts 1 GB as 1,000 MB, about 7% apart). &#8220;Finished&#8221; rests on cached remote evidence and is checked live before any removal.</p></div>
+ <div><h3>Not counted here</h3><p>27 empty leftover folder(s) take no real space. 41.6 GB free of 494.4 GB. 3 Time Machine local snapshot(s) exist. They often hide tens of GB; macOS frees them on its own when space runs low. Clearing them is a separate decision.</p></div>
+</section>
+
+<section class="sec plain"><h3>Where it looked</h3><ul><li>Claude Code worktrees and repositories: searched <code>/Users/sam/code</code></li><li>Codex worktrees: searched <code>/Users/sam/.codex/worktrees</code></li><li>Cursor worktrees: searched <code>/Users/sam/.cursor/worktrees</code></li><li>Temp folder clones: searched <code>/private/tmp</code></li><li>Claude desktop sessions: searched <code>/Users/sam/Library/Application Support/Claude/claude-code-sessions</code> · 64 record(s)</li><li>Claude Code transcripts: searched <code>/Users/sam/.claude/projects</code> · 118 transcript(s)</li><li>Codex thread records: searched <code>/Users/sam/.codex/state.sqlite</code></li></ul></section>
+
+<p class="foot">Source: a scan (no working copy is changed) of Claude Code copies (<code>.claude/worktrees</code>), Codex and Cursor copies, every worktree of each repository seen, and clones in the temp folders, matched to Claude and Codex chat records, running programs and pull requests.</p>
+</div>
+<script>
+const ROWS=[{"g": "inuse", "tool": "Claude Code", "mb": 1480, "touch": 0.1, "codes": [], "id": "9e62ca7f88", "name": "brisk-otter-7f21", "why": "2 running program(s) work inside it (esbuild, node).", "chat": "Claude Code: Rebuild the pricing page", "path": "/Users/sam/code/atlas-web/.claude/worktrees/brisk-otter-7f21", "project": "atlas-web"}, {"g": "inuse", "tool": "Codex", "mb": 612, "touch": 0.2, "codes": ["dirty"], "id": "0859f1c738", "name": "c41e", "why": "Its chat was active in the last day and it has 6 unsaved file(s).", "chat": "Codex: Add idempotency keys to payouts", "path": "/Users/sam/.codex/worktrees/c41e/ledger-api", "project": "ledger-api"}, {"g": "inuse", "tool": "Claude Code", "mb": 498, "touch": 0.4, "codes": ["open-pr"], "id": "fdcfbc540f", "name": "steady-heron-3a08", "why": "Its chat was active in the last day and it has open pull request #88.", "chat": "Claude Code: Push notification settings screen", "path": "/Users/sam/code/mobile-app/.claude/worktrees/steady-heron-3a08", "project": "mobile-app"}, {"g": "inuse", "tool": "Claude Code", "mb": 344, "touch": 0.0, "codes": ["dirty"], "id": "9b4a7ccf44", "name": "amber-finch-0b93", "why": "1 running program(s) work inside it (python3).", "chat": "Claude Code: Offline sync conflict handling", "path": "/Users/sam/code/field-notes/.claude/worktrees/amber-finch-0b93", "project": "field-notes"}, {"g": "inuse", "tool": "Claude Code", "mb": 187, "touch": 0.3, "codes": ["dirty"], "id": "daaa13f69e", "name": "lucid-wren-55ae", "why": "Its chat was active in the last day and it has 2 unsaved file(s).", "chat": "Claude Code: Rewrite the install guide", "path": "/Users/sam/code/docs-site/.claude/worktrees/lucid-wren-55ae", "project": "docs-site"}, {"g": "recent", "tool": "Claude Code", "mb": 1320, "touch": 1.2, "codes": [], "id": "1ad49a1604", "name": "calm-ibis-9d44", "why": "Active recently: its chat was active 1.2 days ago.", "chat": "Claude Code: Cart drawer accessibility pass", "path": "/Users/sam/code/atlas-web/.claude/worktrees/calm-ibis-9d44", "project": "atlas-web"}, {"g": "recent", "tool": "Claude Code", "mb": 1105, "touch": 2.6, "codes": [], "id": "9e56361074", "name": "eager-lynx-2c7b", "why": "Active recently: its chat was active 2.6 days ago and git activity 2.7 days ago.", "chat": "Claude Code: Image lazy loading", "path": "/Users/sam/code/atlas-web/.claude/worktrees/eager-lynx-2c7b", "project": "atlas-web"}, {"g": "recent", "tool": "Codex", "mb": 940, "touch": 1.9, "codes": [], "id": "d5b1b746bc", "name": "7b90", "why": "Active recently: git activity 1.9 days ago.", "chat": "Codex: Backfill job for late events", "path": "/Users/sam/.codex/worktrees/7b90/data-pipeline", "project": "data-pipeline"}, {"g": "recent", "tool": "Claude Code", "mb": 880, "touch": 3.1, "codes": [], "id": "cca3aa8130", "name": "mellow-crane-e1f6", "why": "Active recently: its chat was active 3.1 days ago.", "chat": "Claude Code: Statement export as CSV", "path": "/Users/sam/code/ledger-api/.claude/worktrees/mellow-crane-e1f6", "project": "ledger-api"}, {"g": "recent", "tool": "Claude Code", "mb": 760, "touch": 0.8, "codes": [], "id": "0f41bb8baa", "name": "rapid-tern-64d0", "why": "Active recently: its chat was active 19 hour(s) ago.", "chat": "Claude Code: Fix keyboard overlap on small phones", "path": "/Users/sam/code/mobile-app/.claude/worktrees/rapid-tern-64d0", "project": "mobile-app"}, {"g": "recent", "tool": "Codex", "mb": 655, "touch": 2.2, "codes": [], "id": "c24e233977", "name": "d2a7", "why": "Active recently: git activity 2.2 days ago.", "chat": "Codex: Retry policy for the bank webhook", "path": "/Users/sam/.codex/worktrees/d2a7/ledger-api", "project": "ledger-api"}, {"g": "recent", "tool": "Cursor", "mb": 540, "touch": 3.6, "codes": [], "id": "a643a67a98", "name": "p4m8q", "why": "Active recently: git activity 3.6 days ago.", "chat": "", "path": "/Users/sam/.cursor/worktrees/atlas-web/p4m8q", "project": "atlas-web"}, {"g": "recent", "tool": "Claude Code", "mb": 420, "touch": 1.5, "codes": [], "id": "bc041edb43", "name": "gentle-swift-b7c1", "why": "Active recently: its chat was active 1.5 days ago.", "chat": "Claude Code: Photo attachments on notes", "path": "/Users/sam/code/field-notes/.claude/worktrees/gentle-swift-b7c1", "project": "field-notes"}, {"g": "recent", "tool": "Claude Code", "mb": 366, "touch": 2.9, "codes": [], "id": "cd31d862b9", "name": "sunny-kite-08a3", "why": "Active recently: its chat was active 2.9 days ago.", "chat": "Claude Code: Search index for the API pages", "path": "/Users/sam/code/docs-site/.claude/worktrees/sunny-kite-08a3", "project": "docs-site"}, {"g": "recent", "tool": "Codex", "mb": 251, "touch": 3.8, "codes": [], "id": "51057c424a", "name": "19fe", "why": "Active recently: git activity 3.8 days ago.", "chat": "Codex: Pin the base image digest", "path": "/Users/sam/.codex/worktrees/19fe/infra", "project": "infra"}, {"g": "recent", "tool": "Claude Code", "mb": 198, "touch": 1.1, "codes": [], "id": "652eefca01", "name": "tidy-raven-c502", "why": "Active recently: its chat was active 1.1 days ago.", "chat": "Claude Code: Alert on certificate expiry", "path": "/Users/sam/code/infra/.claude/worktrees/tidy-raven-c502", "project": "infra"}, {"g": "decide", "tool": "Claude Code", "mb": 2210, "touch": 41.0, "codes": ["dirty"], "id": "2e14b0ed09", "name": "faded-moth-71be", "why": "14 unsaved or untracked file(s), e.g. src/checkout/Flow.tsx, notes.md, mock/orders.json.", "chat": "Claude Code: Checkout redesign spike (archived)", "path": "/Users/sam/code/atlas-web/.claude/worktrees/faded-moth-71be", "project": "atlas-web"}, {"g": "decide", "tool": "Codex", "mb": 1340, "touch": 23.4, "codes": ["unpublished"], "id": "7de32f1424", "name": "03cd", "why": "3 commit(s) on columnar-spike are not on any remote.", "chat": "Codex: Try columnar storage for events", "path": "/Users/sam/.codex/worktrees/03cd/data-pipeline", "project": "data-pipeline"}, {"g": "decide", "tool": "Claude Code", "mb": 905, "touch": 17.2, "codes": ["ignored"], "id": "c88df96f6a", "name": "plain-vole-aa19", "why": "2 ignored file(s) or folder(s) that exist only here, e.g. .env.local, sandbox.sqlite. Removal would delete them.", "chat": "Claude Code: Local sandbox for the bank API", "path": "/Users/sam/code/ledger-api/.claude/worktrees/plain-vole-aa19", "project": "ledger-api"}, {"g": "decide", "tool": "Claude Code", "mb": 760, "touch": 29.0, "codes": ["closed-pr"], "id": "3be786ba63", "name": "dusty-pike-5e30", "why": "Pull request #61 was closed without merging.", "chat": "Claude Code: Tablet layout experiment", "path": "/Users/sam/code/mobile-app/.claude/worktrees/dusty-pike-5e30", "project": "mobile-app"}, {"g": "decide", "tool": "Claude Code", "mb": 540, "touch": 12.3, "codes": ["no-pr"], "id": "15a14bee0d", "name": "windy-shrew-d4f7", "why": "Branch windy-shrew-d4f7 is on GitHub but has no pull request.", "chat": "Claude Code: Coupon stacking rules", "path": "/Users/sam/code/atlas-web/.claude/worktrees/windy-shrew-d4f7", "project": "atlas-web"}, {"g": "decide", "tool": "Codex", "mb": 480, "touch": 9.1, "codes": ["dirty", "unpublished"], "id": "eeb71ba8b9", "name": "8e15", "why": "5 unsaved or untracked file(s), e.g. importers/txt.py, samples/a.txt. 1 commit(s) on txt-import are not on any remote.", "chat": "Codex: Import from plain text files", "path": "/Users/sam/.codex/worktrees/8e15/field-notes", "project": "field-notes"}, {"g": "decide", "tool": "Claude Code", "mb": 310, "touch": 34.5, "codes": ["private-history"], "id": "ff51fd54e5", "name": "hollow-newt-2b6c", "why": "2 commit(s) are kept only by its own reflog or worktree refs in this copy and are not on any remote or branch.", "chat": "Claude Code: Versioned docs prototype", "path": "/Users/sam/code/docs-site/.claude/worktrees/hollow-newt-2b6c", "project": "docs-site"}, {"g": "decide", "tool": "Temp folder", "mb": 212, "touch": 52.0, "codes": ["no-remote"], "id": "96e11ebdf6", "name": "ledger-api-bisect", "why": "No remote to compare against, so nothing proves the work is saved elsewhere.", "chat": "", "path": "/private/tmp/ledger-api-bisect", "project": "scratch-clone"}, {"g": "decide", "tool": "Claude Code", "mb": 164, "touch": 6.2, "codes": ["pr-unknown"], "id": "2424149492", "name": "silent-carp-90ad", "why": "Pull requests for silent-carp-90ad could not be fully checked.", "chat": "Claude Code: Terraform state move", "path": "/Users/sam/code/infra/.claude/worktrees/silent-carp-90ad", "project": "infra"}, {"g": "done", "tool": "Claude Code", "mb": 1980, "touch": 9.3, "codes": [], "id": "0c22f95c95", "name": "quiet-harbor-41c2", "why": "Work merged (pull request #212 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Fix checkout rounding", "path": "/Users/sam/code/atlas-web/.claude/worktrees/quiet-harbor-41c2", "project": "atlas-web"}, {"g": "done", "tool": "Claude Code", "mb": 1450, "touch": 14.8, "codes": [], "id": "9a0fd5951d", "name": "north-plover-6ea1", "why": "Work merged (pull request #205 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Product page skeleton states", "path": "/Users/sam/code/atlas-web/.claude/worktrees/north-plover-6ea1", "project": "atlas-web"}, {"g": "done", "tool": "Codex", "mb": 1210, "touch": 6.4, "codes": [], "id": "bd799e340a", "name": "e77a", "why": "Work merged (pull request #219 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Codex: Upgrade the bundler", "path": "/Users/sam/.codex/worktrees/e77a/atlas-web", "project": "atlas-web"}, {"g": "done", "tool": "Claude Code", "mb": 1100, "touch": 18.2, "codes": [], "id": "9dff04f807", "name": "broad-egret-13f9", "why": "Work merged (pull request #140 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Double-entry check on refunds", "path": "/Users/sam/code/ledger-api/.claude/worktrees/broad-egret-13f9", "project": "ledger-api"}, {"g": "done", "tool": "Claude Code", "mb": 960, "touch": 11.0, "codes": [], "id": "28c3338752", "name": "low-marten-c8d2", "why": "Work merged (pull request #77 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Dead-letter queue dashboard", "path": "/Users/sam/code/data-pipeline/.claude/worktrees/low-marten-c8d2", "project": "data-pipeline"}, {"g": "done", "tool": "Codex", "mb": 820, "touch": 7.7, "codes": [], "id": "468ad7d55f", "name": "5b3c", "why": "Work merged (pull request #143 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Codex: Paginate the transactions endpoint", "path": "/Users/sam/.codex/worktrees/5b3c/ledger-api", "project": "ledger-api"}, {"g": "done", "tool": "Claude Code", "mb": 640, "touch": 21.5, "codes": [], "id": "0068b01b2f", "name": "pale-dove-f204", "why": "Work merged (pull request #83 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Biometric unlock", "path": "/Users/sam/code/mobile-app/.claude/worktrees/pale-dove-f204", "project": "mobile-app"}, {"g": "done", "tool": "Claude Code", "mb": 505, "touch": 5.2, "codes": [], "id": "a616fcdfbd", "name": "keen-toad-7a5d", "why": "Work merged (pull request #51 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Tag filter on the list view", "path": "/Users/sam/code/field-notes/.claude/worktrees/keen-toad-7a5d", "project": "field-notes"}, {"g": "done", "tool": "Claude Code", "mb": 410, "touch": 26.1, "codes": [], "id": "5ea4a2b117", "name": "warm-lark-e9b0", "why": "Work merged (pull request #34 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Fix broken anchors", "path": "/Users/sam/code/docs-site/.claude/worktrees/warm-lark-e9b0", "project": "docs-site"}, {"g": "done", "tool": "Codex", "mb": 330, "touch": 13.6, "codes": [], "id": "65a84f3a73", "name": "a6d4", "why": "Work merged (pull request #49 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Codex: Export notes as Markdown", "path": "/Users/sam/.codex/worktrees/a6d4/field-notes", "project": "field-notes"}, {"g": "done", "tool": "Claude Code", "mb": 240, "touch": 38.4, "codes": [], "id": "6aa8ab8c38", "name": "still-orca-3c18", "why": "Work merged (pull request #18 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude Code: Rotate the deploy key", "path": "/Users/sam/code/infra/.claude/worktrees/still-orca-3c18", "project": "infra"}, {"g": "done", "tool": "Claude Code", "mb": 96, "touch": 8.9, "codes": [], "id": "15a0f44ba7", "name": "agent-a19f0c", "why": "Work merged (pull request #36 includes this exact commit). Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude CLI: background helper", "path": "/Users/sam/code/docs-site/.claude/worktrees/agent-a19f0c", "project": "docs-site"}, {"g": "done", "tool": "Claude Code", "mb": 41, "touch": 16.3, "codes": [], "id": "5a1728cbcb", "name": "agent-b7702e", "why": "Everything here is already in the main branch. Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude CLI: background helper", "path": "/Users/sam/code/infra/.claude/worktrees/agent-b7702e", "project": "infra"}, {"g": "done", "tool": "Claude Code", "mb": 22, "touch": 30.2, "codes": [], "id": "7fb5b87dd1", "name": "agent-c3d91a", "why": "Everything here is already in the main branch. Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude CLI: background helper", "path": "/Users/sam/code/field-notes/.claude/worktrees/agent-c3d91a", "project": "field-notes"}, {"g": "done", "tool": "Claude Code", "mb": 14, "touch": 19.7, "codes": [], "id": "8c3d1c9991", "name": "agent-d58e44", "why": "Everything here is already in the main branch. Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude CLI: background helper", "path": "/Users/sam/code/docs-site/.claude/worktrees/agent-d58e44", "project": "docs-site"}, {"g": "done", "tool": "Claude Code", "mb": 9, "touch": 24.9, "codes": [], "id": "613c0d2973", "name": "agent-e04b7f", "why": "Everything here is already in the main branch. Nothing local-only found. (Remote evidence is cached; it is checked live again before removal.)", "chat": "Claude CLI: background helper", "path": "/Users/sam/code/infra/.claude/worktrees/agent-e04b7f", "project": "infra"}];
+const META={"groups": [{"k": "inuse", "t": "In use right now", "s": "In use", "a": "Leave alone. Work is happening in these."}, {"k": "recent", "t": "Active in the last few days", "s": "Recent", "a": "Leave for now; recheck in a few days."}, {"k": "decide", "t": "Your call: holds work found nowhere else", "s": "Your call", "a": "Keep until someone decides: finish, save or drop."}, {"k": "done", "t": "Finished: nothing local-only found", "s": "Finished", "a": "Work is on a remote; checked live again before removal."}], "disk": {"free": 41.6, "total": 494.4, "snaps": 3}, "reasons": {"timeout": "Not fully checked before the time limit.", "proc-check": "Running programs could not be fully checked.", "owners-incomplete": "Chat records could not all be read.", "git-missing": "Git data is missing or damaged.", "unknown": "Some git checks failed.", "protected-main": "This is a main checkout.", "dependents": "Other working copies depend on its git data.", "foreign-gitdir": "Its git data lives elsewhere (submodule or separate git folder).", "contains": "Another repository or copy is inside it.", "helpers": "Its settings run external programs, so it was not inspected.", "unsupported": "Unsupported git setup (partial clone or borrowed objects).", "dirty": "Unsaved or untracked files.", "ignored": "Ignored files that exist only here.", "hidden": "Files hidden from git status.", "submodules": "Has submodules.", "lfs": "Uses Git LFS.", "unpublished": "Commits not on any remote.", "private-history": "Local-only history (tags, refs or reflog).", "open-pr": "Pull request still open.", "no-pr": "Pushed branch with no pull request.", "closed-pr": "Pull request closed without merging.", "pr-unknown": "Pull requests could not be fully checked.", "no-remote": "No usable remote to compare against.", "empty-repo": "Repository has no commits.", "local-remote": "Its only remote is another folder on this computer."}, "redact": false, "histState": "on", "histCount": 13, "hist": [{"t": 1791387000, "free": 63.2, "mb": [2100, 5200, 3100, 4200], "n": [3, 8, 4, 6], "partial": 0}, {"t": 1791732600, "free": 60.1, "mb": [2600, 6100, 3300, 5900], "n": [4, 9, 4, 8], "partial": 0}, {"t": 1792164600, "free": 55.4, "mb": [1900, 7300, 3900, 8800], "n": [3, 10, 5, 12], "partial": 0}, {"t": 1792510200, "free": 49.8, "mb": [3400, 6800, 4300, 12400], "n": [5, 9, 6, 17], "partial": 0}, {"t": 1792769400, "free": 44.0, "mb": [2800, 8500, 4600, 15900], "n": [4, 12, 6, 21], "partial": 0}, {"t": 1793115000, "free": 31.4, "mb": [3900, 7900, 5100, 19600], "n": [6, 11, 7, 26], "partial": 0}, {"t": 1793374200, "free": 54.7, "mb": [2500, 6200, 5200, 900], "n": [4, 9, 7, 2], "partial": 0}, {"t": 1793719800, "free": 52.0, "mb": [3000, 5600, 5600, 2700], "n": [4, 8, 7, 5], "partial": 0}, {"t": 1794065400, "free": 49.6, "mb": [2200, 7000, 5900, 4600], "n": [3, 10, 8, 7], "partial": 0}, {"t": 1794411000, "free": 47.1, "mb": [3600, 6400, 6300, 6200], "n": [5, 9, 8, 10], "partial": 0}, {"t": 1794670200, "free": 45.0, "mb": [2900, 8100, 6500, 7700], "n": [4, 12, 9, 12], "partial": 0}, {"t": 1794929400, "free": 43.2, "mb": [3300, 7600, 6800, 8900], "n": [5, 11, 9, 14], "partial": 0}, {"t": 1795188600, "free": 41.6, "mb": [3121, 7435, 6921, 9827], "n": [5, 11, 9, 16], "partial": 0}]};
+
+(function(){
+"use strict";
+const G=META.groups,GK=G.map(g=>g.k),GI={};G.forEach((g,i)=>{GI[g.k]=i;});
+/* The SVG namespace name, written in pieces so this file holds no literal web address; a namespace is never fetched. */
+const NS=["http:","","www.w3.org","2000","svg"].join("/"),$=id=>document.getElementById(id);
+const calm=!!(window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches);
+function put(n,a,kids){
+ if(a)for(const k in a){const v=a[k];if(v==null||v===false)continue;
+  if(k==="style")n.style.cssText=v;else n.setAttribute(k,v===true?"":String(v));}
+ for(const c of kids.flat(5)){if(c==null||c===false||c==="")continue;n.append(c.nodeType?c:document.createTextNode(String(c)));}
+ return n;}
+const h=(t,a,...k)=>put(document.createElement(t),a,k),s=(t,a,...k)=>put(document.createElementNS(NS,t),a,k);
+const sum=rs=>rs.reduce((t,r)=>t+(r.mb||0),0),add=a=>a.reduce((t,v)=>t+v,0);
+const gb=mb=>mb==null?"not measured":mb>=1024?(mb/1024).toFixed(1)+" GB":Math.round(mb)+" MB";
+const ago=d=>d==null?"no date":d<1?"today":d<2?"1 day ago":Math.round(d)+" days ago";
+const nc=n=>n+(n===1?" copy":" copies");
+const held=rs=>rs.some(r=>r.mb!=null)?gb(sum(rs)):"not measured";
+const pct=f=>f>=0.0995?Math.round(f*100)+"%":f>=0.001?(f*100).toFixed(1)+"%":"under 0.1%";
+const clip=(t,n)=>{t=String(t==null?"":t);return t.length>n?t.slice(0,n-1)+"\u2026":t;};
+const fmtD=new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric"});
+const fmtT=new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+const day=t=>fmtD.format(new Date(t*1000)),dayTime=t=>fmtT.format(new Date(t*1000));
+const rows=ROWS.map((r,i)=>Object.assign({i:i},r)),byG={};
+GK.forEach(k=>{byG[k]=rows.filter(r=>r.g===k);});
+const key=k=>h("i",{class:"key g-"+k});
+function axis(max,n){
+ max=max>0?max:1;const raw=max/n,p=Math.pow(10,Math.floor(Math.log10(raw))),m=raw/p;
+ const step=(m<=1?1:m<=2?2:m<=2.5?2.5:m<=5?5:10)*p,top=Math.ceil(max/step-1e-9)*step,t=[];
+ for(let v=0;v<=top+step/2;v+=step)t.push(+v.toFixed(6));
+ return{top:top,ticks:t};}
+function sizeAxis(maxMb,n){
+ const big=maxMb>=2048,a=axis(big?maxMb/1024:maxMb,n);
+ return{top:big?a.top*1024:a.top,ticks:a.ticks.map(v=>({v:big?v*1024:v,label:v===a.top?v+(big?" GB":" MB"):String(v)}))};}
+
+/* ---- detail layer: one tooltip for hover, keyboard focus and tap ---- */
+const tip=h("div",{id:"tip",role:"tooltip",hidden:true});document.body.append(tip);
+let tipOwner=null,tipOff=null,tipPt=null,lastPointer="mouse";
+function tipPlace(){
+ if(!tipOwner)return;
+ const tr=tip.getBoundingClientRect(),vw=document.documentElement.clientWidth,vh=window.innerHeight,r=tipOwner.getBoundingClientRect(),pt=tipPt;
+ let x=pt?pt.x+14:r.left+r.width/2-tr.width/2,y=pt?pt.y+16:r.bottom+8;
+ if(x+tr.width>vw-8)x=pt?pt.x-tr.width-14:vw-8-tr.width;
+ if(y+tr.height>vh-8)y=(pt?pt.y:r.top)-tr.height-10;
+ tip.style.left=Math.max(8,x)+"px";tip.style.top=Math.max(8,y)+"px";}
+function tipShow(owner,content,pt,off){
+ if(tipOff&&tipOwner!==owner){const f=tipOff;tipOff=null;f();}
+ tipOwner=owner;tipOff=off||null;tipPt=pt||null;tip.replaceChildren(...[content].flat(5).filter(c=>c));tip.hidden=false;tipPlace();}
+function tipHide(){tip.hidden=true;tipOwner=null;tipPt=null;if(tipOff){const f=tipOff;tipOff=null;f();}}
+document.addEventListener("pointerdown",e=>{lastPointer=e.pointerType||"mouse";if(tipOwner&&!tipOwner.contains(e.target))tipHide();},true);
+document.addEventListener("keydown",e=>{if(e.key==="Escape")tipHide();});
+window.addEventListener("scroll",()=>{if(tipOwner){if(tipPt)tipHide();else tipPlace();}},{passive:true});
+function marks(nodes,tipOf,act){
+ nodes.forEach((n,i)=>{
+  n.setAttribute("tabindex",i?"-1":"0");
+  const show=pt=>tipShow(n,tipOf(i),pt);
+  n.addEventListener("pointerenter",e=>{if(e.pointerType!=="touch")show({x:e.clientX,y:e.clientY});});
+  n.addEventListener("pointermove",e=>{if(e.pointerType!=="touch")show({x:e.clientX,y:e.clientY});});
+  n.addEventListener("pointerleave",e=>{if(e.pointerType!=="touch"&&tipOwner===n)tipHide();});
+  n.addEventListener("focus",()=>{if(n.matches(":focus-visible"))show();});
+  n.addEventListener("blur",()=>{if(tipOwner===n)tipHide();});
+  n.addEventListener("click",()=>{if(lastPointer==="touch"&&tipOwner!==n)show();else if(act)act(i);});
+  n.addEventListener("keydown",e=>{
+   const to=e.key==="ArrowRight"||e.key==="ArrowDown"?i+1:e.key==="ArrowLeft"||e.key==="ArrowUp"?i-1:e.key==="Home"?0:e.key==="End"?nodes.length-1:null;
+   if(to!=null){e.preventDefault();const m=nodes[Math.max(0,Math.min(nodes.length-1,to))];if(m!==n){n.setAttribute("tabindex","-1");m.setAttribute("tabindex","0");m.focus();}}
+   else if((e.key==="Enter"||e.key===" ")&&act){e.preventDefault();act(i);}
+  });
+ });}
+const copyTip=r=>[h("div",{class:"tt"},r.name),h("div",null,h("b",null,gb(r.mb))," \u00b7 last touched "+ago(r.touch)),
+ h("div",null,key(r.g),G[GI[r.g]].s+" \u00b7 "+r.project+" \u00b7 "+r.tool),h("div",null,clip(r.why,150))];
+function tv(id,head,body,nums){
+ const d=$(id);if(!d)return;const cls=i=>nums.includes(i)?"num":null;
+ d.replaceChildren(h("summary",null,"Show as a table"),h("div",{class:"tablewrap"},h("table",null,
+  h("thead",null,h("tr",null,head.map((x,i)=>h("th",{class:cls(i),scope:"col"},x)))),
+  h("tbody",null,body.map(r=>h("tr",null,r.map((x,i)=>h("td",{class:cls(i)},x))))))));}
+
+/* ---- the disk to scale, and the agent copies magnified ---- */
+function drawScale(){
+ const box=$("scale");if(!box)return;
+ const d=META.disk||{},meas=rows.filter(r=>r.mb>0),tot=sum(meas),W=box.clientWidth||600,kids=[];
+ let strip=null,cps=null,wsvg=null,factor=0;
+ if(d.total>0&&d.free!=null&&tot>0){
+  const T=d.total*1e9,cb=tot*1048576,fb=Math.min(d.free*1e9,T),ob=Math.max(0,T-fb-cb),all=ob+cb+fb;
+  factor=all/cb;
+  const other=h("div",{class:"seg other",style:"flex:"+(ob/all*1e4)+" 0 0px",role:"img","aria-label":"Everything else on this disk: about "+Math.round(ob/1e9)+" GB"});
+  cps=h("div",{class:"seg cps",style:"flex:"+(cb/all*1e4)+" 0 0px",role:"img","aria-label":"Agent copies: "+gb(tot)+", "+pct(cb/all)+" of the disk"});
+  GK.forEach(k=>{const m=sum(byG[k]);if(m>0)cps.append(h("i",{class:"g-"+k,style:"flex:"+m+" 0 0px"}));});
+  const free=h("div",{class:"seg free",style:"flex:"+(fb/all*1e4)+" 0 0px",role:"img","aria-label":"Free: "+d.free+" GB"});
+  strip=h("div",{class:"strip",role:"group","aria-label":"The whole disk, drawn to scale"},other,cps,free);
+  marks([other,cps,free],i=>i===0?[h("div",{class:"tt"},"Everything else on this disk"),h("div",null,h("b",null,"about "+Math.round(ob/1e9)+" GB")," \u00b7 "+pct(ob/all))]
+   :i===1?[h("div",{class:"tt"},"Agent copies"),h("div",null,h("b",null,gb(tot))," in "+nc(meas.length)+" \u00b7 "+pct(cb/all)+" of the disk")]
+   :[h("div",{class:"tt"},"Free space"),h("div",null,h("b",null,d.free+" GB")," of "+d.total+" GB \u00b7 "+pct(fb/all)),d.snaps!=null&&h("div",null,d.snaps+" local snapshot(s) are not counted as free")]);
+  wsvg=s("svg",{class:"wedge","aria-hidden":"true",preserveAspectRatio:"none"},s("polygon",null),s("line",null),s("line",null));
+  kids.push(h("div",{class:"ends"},h("span",null,"Everything else on this disk: ",h("b",null,"about "+Math.round(ob/1e9)+" GB")),
+   h("span",null,"Free: ",h("b",null,d.free+" GB")," of "+d.total+" GB")),strip,wsvg);
+ }
+ const lab=h("div",{class:"runlabels","aria-hidden":"true"}),mag=h("div",{class:"mag",role:"group","aria-label":"Agent copies, one block per copy, in four groups"});
+ const nodes=[],tips=[],acts=[],first={},last={};
+ GK.forEach(k=>{
+  const rs=byG[k].filter(r=>r.mb>0).sort((a,b)=>b.mb-a.mb);if(!rs.length)return;
+  let big=rs.filter(r=>r.mb/tot*W>=5),small=rs.filter(r=>r.mb/tot*W<5);
+  if(small.length===1){big=rs;small=[];}
+  const blk=(cls,mb,label,t,a)=>{const n=h("div",{class:"blk g-"+k+cls,style:"flex:"+mb+" 0 0px",role:"img","aria-label":label});
+   mag.append(n);nodes.push(n);tips.push(t);acts.push(a);first[k]=first[k]||n;last[k]=n;};
+  big.forEach(r=>blk("",r.mb,r.name+", "+gb(r.mb)+", "+G[GI[k]].s,()=>copyTip(r),()=>jump(r.i)));
+  if(small.length)blk(" many",sum(small),small.length+" smaller copies, "+gb(sum(small))+" together, "+G[GI[k]].s,
+   ()=>[h("div",{class:"tt"},small.length+" smaller copies"),h("div",null,h("b",null,gb(sum(small)))," together"),h("div",null,key(k),G[GI[k]].s+" \u00b7 listed in the tables below")],
+   ()=>goGroup(k));
+ });
+ if(tot>0)kids.push(lab,mag);
+ const dn=byG.done.filter(r=>r.mb>0);let brk=null;
+ if(dn.length){brk=h("div",{class:"brk"});kids.push(h("div",{class:"ann"},brk,h("p",{class:"anntext"},nc(dn.length).replace(" cop"," finished cop")+" can go: up to "+gb(sum(dn)))));}
+ box.replaceChildren(...kids);
+ marks(nodes,i=>tips[i](),i=>acts[i]());
+ const mr=mag.getBoundingClientRect();
+ GK.forEach(k=>{if(!first[k])return;const a=first[k].getBoundingClientRect(),b=last[k].getBoundingClientRect(),x0=a.left-mr.left,w=b.right-a.left;
+  const sp=h("span",{style:"left:"+x0+"px"},h("b",null,G[GI[k]].s)," "+gb(sum(byG[k])));lab.append(sp);
+  if(sp.offsetWidth>w-12){sp.replaceChildren(h("b",null,G[GI[k]].s));if(sp.offsetWidth>w-12)sp.remove();}
+  if(k==="done"&&brk){brk.style.left=x0+"px";brk.style.width=Math.max(6,w)+"px";}});
+ if(wsvg){const sr=strip.getBoundingClientRect(),cr=cps.getBoundingClientRect(),x0=cr.left-sr.left,x1=cr.right-sr.left,w=sr.width,H=42;
+  wsvg.setAttribute("viewBox","0 0 "+w+" "+H);const[p,l1,l2]=wsvg.children;
+  p.setAttribute("points",x0+",0 "+x1+",0 "+w+","+H+" 0,"+H);
+  put(l1,{x1:x0,y1:0,x2:0,y2:H},[]);put(l2,{x1:x1,y1:0,x2:w,y2:H},[]);}
+ const un=rows.filter(r=>r.mb==null).length,cap=$("scale-cap");
+ if(cap)cap.textContent=!tot?"No copy had its size measured in this scan, so nothing can be drawn to scale. The groups and counts below still hold.":((factor>=1.5?"The agent copies are drawn "+(factor>=10?Math.round(factor):factor.toFixed(1))+"\u00d7 larger than on the disk above. ":"")
+  +"Each block is one copy, widest first in its group; a pale block stands for several small ones. Hover or tap a block for details, or use the arrow keys."
+  +(un?" "+nc(un)+" had no size measured and "+(un===1?"is":"are")+" not drawn.":""));
+}
+function drawSummary(){
+ const b=$("sum");if(!b)return;
+ b.replaceChildren(...G.map(g=>{const rs=byG[g.k],a=h("a",{href:"#"+g.k},g.t);a.addEventListener("click",e=>{e.preventDefault();goGroup(g.k);});
+  return h("tr",{class:"g-"+g.k},h("td",null,key(g.k),a),
+  h("td",{class:"num"},nc(rs.length)),h("td",{class:"num"},rs.length?held(rs):"\u2014"),h("td",null,g.a));}));}
+
+/* ---- free space at each scan, from the private history ---- */
+function linePlot(box,P,o){
+ const W=Math.max(120,box.clientWidth),H=o.h,mt=o.mt,mb=o.mb,pl=o.pl,pr=o.pr;
+ const t0=P[0].t,t1=P[P.length-1].t,span=Math.max(t1-t0,1);
+ const xs=t=>P.length<2?(pl+W-pr)/2:pl+(t-t0)/span*(W-pl-pr),ys=v=>mt+(1-v/o.top)*(H-mt-mb);
+ const svg=s("svg",{class:"plot"+(o.cls||""),viewBox:"0 0 "+W+" "+H,width:W,height:H,tabindex:"0",role:"group","aria-label":o.label});
+ const cross=s("line",{class:"cross",y1:mt-6,y2:H-mb,visibility:"hidden"}),ring=s("circle",{class:"ring",r:8,visibility:"hidden"});
+ let cur=P.length-1;
+ const clear=()=>{cross.setAttribute("visibility","hidden");ring.setAttribute("visibility","hidden");};
+ const at=(i,pt)=>{cur=i;const p=P[i],x=xs(p.t),y=ys(o.val(p));put(cross,{x1:x,x2:x,visibility:"visible"},[]);put(ring,{cx:x,cy:y,visibility:"visible"},[]);
+  const r=svg.getBoundingClientRect(),k=r.width/W;tipShow(svg,o.tip(p),pt||{x:r.left+x*k,y:r.top+y*k},clear);};
+ const near=e=>{const r=svg.getBoundingClientRect(),x=(e.clientX-r.left)*(W/r.width);let b=0,bd=1e9;P.forEach((p,i)=>{const dx=Math.abs(xs(p.t)-x);if(dx<bd){bd=dx;b=i;}});return b;};
+ svg.addEventListener("pointermove",e=>at(near(e),{x:e.clientX,y:e.clientY}));
+ svg.addEventListener("pointerdown",e=>at(near(e),{x:e.clientX,y:e.clientY}));
+ svg.addEventListener("pointerleave",e=>{if(e.pointerType!=="touch"&&tipOwner===svg)tipHide();});
+ svg.addEventListener("focus",()=>{if(svg.matches(":focus-visible"))at(cur);});
+ svg.addEventListener("blur",()=>{if(tipOwner===svg)tipHide();});
+ svg.addEventListener("keydown",e=>{const dlt=e.key==="ArrowRight"?1:e.key==="ArrowLeft"?-1:e.key==="Home"?-1e6:e.key==="End"?1e6:0;
+  if(dlt){e.preventDefault();at(Math.max(0,Math.min(P.length-1,cur+dlt)));}});
+ return{svg:svg,W:W,H:H,xs:xs,ys:ys,cross:cross,ring:ring,t0:t0,span:span};}
+function drawTime(){
+ const sec=$("time-sec");if(!sec)return;
+ const box=$("timeline"),mults=$("multiples"),mcap=$("mult-cap"),note=$("time-note"),title=$("time-h"),P=META.hist||[];
+ if(META.histState!=="on"||!P.length){
+  [box,mults,mcap,$("time-tv")].forEach(n=>{if(n)n.hidden=true;});
+  note.textContent=META.histState==="hidden"?"The free-space history ("+META.histCount+" scan"+(META.histCount===1?"":"s")+" on record) is left out of this shareable copy. It stays on the private page."
+   :"History is off for this scan (--no-history), so there is no trend to draw.";
+  return;}
+ const F=P.filter(p=>p.free!=null),L=P[P.length-1];
+ if(F.length>=2){const a=F[0],z=F[F.length-1],dl=z.free-a.free,since=(z.t-a.t<3*86400?dayTime:day)(a.t);
+  title.textContent=Math.abs(dl)<0.05?"Free space is level since "+since:"Free space is "+(dl<0?"down ":"up ")+Math.abs(dl).toFixed(1)+" GB since "+since;
+  note.textContent=F.length+" scans on record: "+a.free+" GB free at the first, "+z.free+" GB now. Agent copies went from "+gb(add(P[0].mb))+" to "+gb(add(L.mb))+" over the same time. Each dot is one scan; nothing is known between them.";}
+ else{title.textContent=F.length?"Free space: "+F[0].free+" GB at this scan":"Free space at each scan";
+  note.textContent="This is the first scan on record with these settings. Each later scan adds a dot, so a trend shows from the second scan on.";}
+ box.replaceChildren();
+ if(F.length){
+  const narrow=box.clientWidth<520,ax=axis(Math.max(...F.map(p=>p.free)),4);
+  const c=linePlot(box,F,{h:narrow?230:270,mt:36,mb:34,pl:48,pr:14,top:ax.top,val:p=>p.free,label:"Free space at each scan. Left and right arrow keys step through the scans.",
+   tip:p=>[h("div",{class:"tt"},dayTime(p.t)),h("div",null,h("b",null,p.free+" GB")," free"),
+    h("div",null,h("b",null,gb(add(p.mb)))," in "+nc(add(p.n))+(p.partial?" (some not measured)":"")),G.map((g,i)=>h("div",null,key(g.k),h("b",null,gb(p.mb[i]))," "+g.s+" \u00b7 "+p.n[i]))]});
+  const v=c.svg,xs=c.xs,ys=c.ys,W=c.W,H=c.H,base=ys(0);
+  ax.ticks.forEach(t=>{v.append(s("line",{class:t?"grid":"base",x1:0,x2:W,y1:ys(t),y2:ys(t)}),s("text",{x:0,y:ys(t)-6},t===ax.top?t+" GB":String(t)));});
+  const n=F.length<2?1:Math.max(2,Math.min(5,Math.floor(W/130))),fmt=c.span<3*86400?dayTime:day;let prev="";
+  for(let j=0;j<n;j++){const t=n<2?c.t0:c.t0+c.span*j/(n-1),lbl=fmt(t);if(lbl===prev)continue;prev=lbl;
+   v.append(s("text",{x:n<2?xs(t):j===0?Math.max(0,xs(t)-24):j===n-1?W:xs(t),y:H-8,"text-anchor":n<2?"middle":j===0?"start":j===n-1?"end":"middle"},lbl));}
+  F.forEach(p=>v.append(s("line",{class:"base",x1:xs(p.t),x2:xs(p.t),y1:base,y2:base+5})));
+  let em=0,emd=0;for(let i=1;i<F.length;i++){const dl=Math.abs(F[i].free-F[i-1].free);if(dl>emd){emd=dl;em=i;}}
+  if(emd<Math.max(0.5,ax.top*0.04))em=0;
+  for(let i=1;i<F.length;i++)v.append(s("line",{class:"ln"+(i===em?" em":""),x1:xs(F[i-1].t),y1:ys(F[i-1].free),x2:xs(F[i].t),y2:ys(F[i].free)}));
+  v.append(c.cross);
+  F.forEach((p,i)=>v.append(s("circle",{class:"dot",cx:xs(p.t),cy:ys(p.free),r:i===F.length-1?5.5:4})));
+  const z=F[F.length-1],zx=xs(z.t);
+  v.append(s("text",{class:"strong",x:zx>W-70?W:zx,y:ys(z.free)-13,"text-anchor":zx>W-70?"end":"middle"},z.free+" GB"));
+  if(em){const a=F[em-1],b=F[em],xm=(xs(a.t)+xs(b.t))/2,dl=b.free-a.free,dn=add(b.n)-add(a.n),ty=Math.min(ys(a.free),ys(b.free))-13;
+   const why=dl>0&&dn<0?nc(-dn).replace(" cop"," fewer cop"):dl<0&&dn>0?nc(dn).replace(" cop"," more cop"):"";
+   if(xm<W-150&&xm>90)v.append(s("text",{class:"strong",x:xm,y:why?ty-19:ty,"text-anchor":"middle"},(dl>0?"+":"\u2212")+Math.abs(dl).toFixed(1)+" GB"),why&&s("text",{x:xm,y:ty,"text-anchor":"middle"},why));}
+  v.append(c.ring);box.append(v);
+ }else box.hidden=true;
+ const M=P.filter(p=>!p.partial);
+ if(M.length<2){mults.hidden=true;mcap.hidden=true;}
+ else{
+  const sa=sizeAxis(Math.max(1,...M.flatMap(p=>p.mb)),2);mults.replaceChildren();
+  G.forEach((g,gi)=>{
+   const cell=h("div",{class:"mult g-"+g.k}),pb=h("div",null),lastv=M[M.length-1].mb[gi],dl=lastv-M[0].mb[gi];
+   cell.append(h("div",{class:"mtitle"},h("span",null,key(g.k),g.s),h("span",null,h("b",null,gb(lastv)),Math.abs(dl)>=1?" ("+(dl>0?"+":"\u2212")+gb(Math.abs(dl))+")":"")),pb);mults.append(cell);
+   const c=linePlot(pb,M,{h:86,mt:8,mb:6,pl:5,pr:8,top:sa.top,val:p=>p.mb[gi],cls:" g-"+g.k,label:g.s+": space at each scan. Left and right arrow keys step through the scans.",
+    tip:p=>[h("div",{class:"tt"},dayTime(p.t)),h("div",null,key(g.k),h("b",null,gb(p.mb[gi]))," "+g.s+" \u00b7 "+nc(p.n[gi]))]});
+   const v=c.svg,base=c.ys(0),pts=M.map(p=>c.xs(p.t)+","+c.ys(p.mb[gi]));
+   v.append(s("line",{class:"grid",x1:0,x2:c.W,y1:c.ys(sa.top),y2:c.ys(sa.top)}),s("line",{class:"base",x1:0,x2:c.W,y1:base,y2:base}),
+    s("polygon",{class:"wash",points:c.xs(M[0].t)+","+base+" "+pts.join(" ")+" "+c.xs(M[M.length-1].t)+","+base}),
+    s("polyline",{class:"gl",points:pts.join(" ")}),c.cross,
+    s("circle",{class:"gdot",cx:c.xs(M[M.length-1].t),cy:c.ys(lastv),r:4.5}),c.ring);
+   pb.append(v);});
+  mcap.textContent="Space held by each group at each scan. All four share one scale, from 0 to "+gb(sa.top)+"; the change since the first scan is in brackets.";
+ }
+ tv("time-tv",["Scan","Free"].concat(G.map(g=>g.s),["Copies"]),P.slice().reverse().map(p=>[dayTime(p.t),p.free==null?"\u2014":p.free+" GB"].concat(p.mb.map(v=>gb(v)),[add(p.n)+(p.partial?" (some not measured)":"")])),[1,2,3,4,5,6]);
+}
+
+/* ---- ranked rows: what holds the "your call" copies, and copies by project ---- */
+function barRows(box,items,stack){
+ const max=Math.max(1e-9,...items.map(x=>x.total)),nodes=[],tips=[],acts=[];
+ box.replaceChildren(h("div",{class:"rows"+(stack?" stack":""),role:"list"},items.map(it=>{
+  const run=h("div",{class:"run",style:"width:"+(it.total/max*100).toFixed(3)+"%"});
+  it.segs.forEach(g=>{if(!(g.v>0))return;const n=h("div",{class:"sg g-"+g.k,style:"flex-grow:"+g.v,role:"img","aria-label":g.aria});run.append(n);nodes.push(n);tips.push(g.tip);acts.push(g.act);});
+  return h("div",{class:"row",role:"listitem"},h("div",{class:"rl"},it.label),h("div",{class:"track"},it.total>0&&run),h("div",{class:"rv"},it.value));})));
+ marks(nodes,i=>tips[i](),i=>{if(acts[i])acts[i]();});}
+function drawWhy(){
+ const sec=$("why-sec");if(!sec)return;const D=byG.decide;
+ if(!D.length){sec.hidden=true;return;}
+ const by={};D.forEach(r=>(r.codes.length?r.codes:["other"]).forEach(c=>{(by[c]=by[c]||[]).push(r);}));
+ const name=c=>String(META.reasons[c]||"Needs review.").replace(/\.$/,"");
+ const hasMb=sum(D)>0,items=Object.keys(by).map(c=>({c:c,rs:by[c]})).sort((a,b)=>sum(b.rs)-sum(a.rs)||b.rs.length-a.rs.length);
+ $("why-h").textContent="What holds the "+nc(D.length).replace(" cop"," \u201cyour call\u201d cop");
+ barRows($("reasons"),items.map(it=>{const top=it.rs.slice().sort((a,b)=>(b.mb||0)-(a.mb||0))[0];
+  return{label:name(it.c),total:hasMb?sum(it.rs):it.rs.length,value:held(it.rs)+" \u00b7 "+nc(it.rs.length),
+   segs:[{k:"decide",v:hasMb?sum(it.rs):it.rs.length,aria:name(it.c)+": "+nc(it.rs.length)+", "+held(it.rs),
+    tip:()=>[h("div",{class:"tt"},name(it.c)),h("div",null,h("b",null,it.rs.length+" of "+D.length)," \u201cyour call\u201d copies \u00b7 "+held(it.rs)),h("div",null,"Largest: "+top.name+" ("+gb(top.mb)+")")],
+    act:()=>jump(top.i)}]};}));
+ tv("why-tv",["Reason","Space","Copies"],items.map(it=>[name(it.c),held(it.rs),it.rs.length]),[1,2]);
+}
+function legend(id,shapes){const n=$(id);if(n)n.replaceChildren(...G.filter(g=>byG[g.k].length).map(g=>h("span",{class:"g-"+g.k},
+ shapes?s("svg",{width:14,height:14,viewBox:"-7 -7 14 14","aria-hidden":"true"},s("path",{d:SHAPE[g.k](4.6)})):key(g.k),g.s)));}
+function drawProjects(){
+ const box=$("byproj");if(!box)return;const by={};rows.forEach(r=>{(by[r.project]=by[r.project]||[]).push(r);});
+ let L=Object.keys(by).map(p=>({p:p,rs:by[p]})).sort((a,b)=>sum(b.rs)-sum(a.rs)||b.rs.length-a.rs.length);const ALL=L;
+ if(L.length>9){const rest=L.slice(8);L=L.slice(0,8).concat([{p:rest.length+" other projects",rs:rest.flatMap(x=>x.rs),rest:true}]);}
+ if(L.length>1&&sum(L[0].rs)>0)$("proj-h").textContent=L[0].p+" holds the most: "+gb(sum(L[0].rs))+" in "+nc(L[0].rs.length);
+ barRows(box,L.map(it=>({label:it.p,total:it.rest?0:sum(it.rs),value:held(it.rs)+" \u00b7 "+nc(it.rs.length),
+  segs:it.rest?[]:GK.map(k=>{const rs=it.rs.filter(r=>r.g===k);return{k:k,v:sum(rs),aria:it.p+", "+G[GI[k]].s+": "+gb(sum(rs))+" in "+nc(rs.length),
+   tip:()=>[h("div",{class:"tt"},it.p),h("div",null,key(k),h("b",null,gb(sum(rs)))," "+G[GI[k]].s+" \u00b7 "+nc(rs.length)),h("div",null,gb(sum(it.rs))+" in all "+nc(it.rs.length))],
+   act:()=>goGroup(k)};})})),true);
+ if(L[L.length-1].rest)$("proj-note").textContent+=" The eight largest are drawn; the rest are summed on the last line and listed in the table.";
+ legend("proj-lg",false);
+ tv("proj-tv",["Project"].concat(G.map(g=>g.s),["All","Copies"]),ALL.map(it=>[it.p].concat(GK.map(k=>{const rs=it.rs.filter(r=>r.g===k);return rs.length?gb(sum(rs)):"\u2014";}),[held(it.rs),it.rs.length])),[1,2,3,4,5,6]);
+}
+
+/* ---- size against age: one mark per copy, shape and color by group ---- */
+const SHAPE={inuse:r=>"M"+(-r)+",0a"+r+","+r+" 0 1,0 "+2*r+",0a"+r+","+r+" 0 1,0 "+(-2*r)+",0",
+ recent:r=>"M0,"+(-1.2*r)+"L"+1.15*r+","+0.85*r+"L"+(-1.15*r)+","+0.85*r+"Z",
+ decide:r=>"M0,"+(-1.3*r)+"L"+1.3*r+",0L0,"+1.3*r+"L"+(-1.3*r)+",0Z",
+ done:r=>"M"+(-0.92*r)+","+(-0.92*r)+"h"+1.84*r+"v"+1.84*r+"h"+(-1.84*r)+"Z"};
+function drawScatter(){
+ const box=$("scatter");if(!box)return;
+ const P=rows.filter(r=>r.mb!=null&&r.touch!=null).sort((a,b)=>a.touch-b.touch||a.mb-b.mb),miss=rows.length-P.length;
+ const old=rows.filter(r=>r.touch>=14);
+ $("age-h").textContent=!old.length?"No copy has sat untouched for two weeks":nc(old.length)+" untouched for two weeks or more"+(sum(old)>0?" hold"+(old.length===1?"s ":" ")+gb(sum(old)):"");
+ $("age-note").textContent="Each mark is one copy: higher is bigger, further right is longer since its files or git history last changed."+(miss?" "+nc(miss)+" with no size or date "+(miss===1?"is":"are")+" not drawn.":"");
+ legend("age-lg",true);
+ tv("age-tv",["Copy","Group","Size","Last touched"],rows.slice().sort((a,b)=>(b.mb||0)-(a.mb||0)).map(r=>[r.name,G[GI[r.g]].s,r.mb==null?"\u2014":gb(r.mb),ago(r.touch)]),[2,3]);
+ box.replaceChildren();if(!P.length){box.hidden=true;return;}
+ const W=Math.max(240,box.clientWidth),H=W<520?290:330,mt=30,mb=44,pl=46,pr=14;
+ const ax=axis(Math.max(1,...P.map(r=>r.touch)),W<520?4:6),ay=sizeAxis(Math.max(1,...P.map(r=>r.mb)),4);
+ const xs=v=>pl+v/ax.top*(W-pl-pr),ys=v=>mt+(1-v/ay.top)*(H-mt-mb);
+ const svg=s("svg",{class:"plot",viewBox:"0 0 "+W+" "+H,width:W,height:H,tabindex:"0",role:"group","aria-label":"Size against age, one mark per copy. Arrow keys step through the copies; Enter finds the copy in the tables."});
+ ay.ticks.forEach(t=>svg.append(s("line",{class:t.v?"grid":"base",x1:0,x2:W,y1:ys(t.v),y2:ys(t.v)}),s("text",{x:0,y:ys(t.v)-6},t.label)));
+ ax.ticks.forEach((t,i)=>svg.append(s("line",{class:"base",x1:xs(t),x2:xs(t),y1:ys(0),y2:ys(0)+5}),
+  s("text",{x:xs(t),y:H-22,"text-anchor":i===ax.ticks.length-1?"end":"middle"},String(t))));
+ svg.append(s("text",{x:W,y:H-3,"text-anchor":"end"},"days since last touched \u2192"));
+ const ring=s("circle",{class:"ring",r:10,visibility:"hidden"});
+ P.forEach(r=>svg.append(s("path",{class:"pt g-"+r.g,d:SHAPE[r.g](4.6),transform:"translate("+xs(r.touch)+","+ys(r.mb)+")"})));
+ const top=P.slice().sort((a,b)=>b.mb-a.mb)[0],tx=xs(top.touch),ty=ys(top.mb),lbl=clip(top.name,W<520?20:30)+" \u00b7 "+gb(top.mb),half=lbl.length*4.3+4;
+ const tlab=s("text",{class:"strong",x:Math.max(half,Math.min(W-half,tx)),y:ty-17,"text-anchor":"middle"},lbl);
+ svg.append(s("line",{class:"lead",x1:tx,y1:ty-7,x2:tx,y2:ty-13}),tlab,ring);
+ let cur=-1,armed=false;
+ const clear=()=>{ring.setAttribute("visibility","hidden");cur=-1;};
+ const at=(i,pt)=>{cur=i;const r=P[i],x=xs(r.touch),y=ys(r.mb);put(ring,{cx:x,cy:y,visibility:"visible"},[]);
+  const b=svg.getBoundingClientRect(),k=b.width/W;tipShow(svg,copyTip(r),pt||{x:b.left+x*k,y:b.top+y*k},clear);};
+ const near=e=>{const b=svg.getBoundingClientRect(),k=W/b.width,x=(e.clientX-b.left)*k,y=(e.clientY-b.top)*k;let bi=-1,bd=30*30;
+  P.forEach((r,i)=>{const dx=xs(r.touch)-x,dy=ys(r.mb)-y,dd=dx*dx+dy*dy;if(dd<bd){bd=dd;bi=i;}});return bi;};
+ svg.addEventListener("pointermove",e=>{if(e.pointerType==="touch")return;const i=near(e);if(i<0){if(tipOwner===svg)tipHide();}else at(i,{x:e.clientX,y:e.clientY});});
+ svg.addEventListener("pointerdown",e=>{const i=near(e);armed=e.pointerType!=="touch"||(i>=0&&i===cur);if(i>=0)at(i,{x:e.clientX,y:e.clientY});else if(tipOwner===svg)tipHide();});
+ svg.addEventListener("pointerleave",e=>{if(e.pointerType!=="touch"&&tipOwner===svg)tipHide();});
+ svg.addEventListener("click",e=>{const i=near(e);if(i>=0&&armed)jump(P[i].i);});
+ svg.addEventListener("focus",()=>{if(svg.matches(":focus-visible"))at(cur<0?P.length-1:cur);});
+ svg.addEventListener("blur",()=>{if(tipOwner===svg)tipHide();});
+ svg.addEventListener("keydown",e=>{const dlt=e.key==="ArrowRight"||e.key==="ArrowUp"?1:e.key==="ArrowLeft"||e.key==="ArrowDown"?-1:0;
+  if(dlt){e.preventDefault();at(Math.max(0,Math.min(P.length-1,(cur<0?P.length-1:cur)+dlt)));}
+  else if(e.key==="Enter"&&cur>=0){e.preventDefault();jump(P[cur].i);}});
+ box.append(svg);
+ /* Measured now that it is on the page: the one label never leaves the plot. */
+ const bb=tlab.getBBox(),lx=+tlab.getAttribute("x");
+ if(bb.x<2)tlab.setAttribute("x",lx+2-bb.x);else if(bb.x+bb.width>W-2)tlab.setAttribute("x",lx-(bb.x+bb.width-W+2));
+}
+
+/* ---- every copy, in four filterable tables ---- */
+const projSel=$("proj"),q=$("q"),sortSel=$("sort"),maxMb=Math.max(1,...rows.map(r=>r.mb||0));
+const shut={};
+const SORT={size:(a,b)=>(b.mb||0)-(a.mb||0),age:(a,b)=>(b.touch==null?-1:b.touch)-(a.touch==null?-1:a.touch),name:(a,b)=>a.name.localeCompare(b.name)};
+function draw(){
+ const box=$("groups");if(!box)return;
+ const p=projSel.value,f=q.value.trim().toLowerCase(),by=SORT[sortSel.value]||SORT.size;
+ box.replaceChildren(...G.map(g=>{
+  const rs=byG[g.k].filter(r=>(!p||r.project===p)&&(!f||(r.name+" "+(r.chat||"")+" "+r.why+" "+r.project+" "+r.path+" "+r.tool).toLowerCase().includes(f))).sort(by);
+  const body=rs.length?rs.map(r=>h("tr",{id:"c"+r.i,tabindex:"-1"},
+   h("td",{class:"c-name"},h("div",{class:"name"},r.name),h("div",{class:"sub"},r.project+" \u00b7 "+r.tool,r.id&&[" \u00b7 id ",h("code",null,r.id)])),
+   h("td",{class:"c-why"},r.why,r.chat!=null&&h("div",{class:"sub"},r.chat||"No chat record found"),r.path&&h("div",{class:"sub"},h("code",null,r.path))),
+   h("td",{class:"c-size num"},h("div",{class:"sz"},r.mb==null?"\u2014":gb(r.mb),r.mb>0&&h("div",{class:"szbar",style:"width:"+Math.max(1,r.mb/maxMb*100).toFixed(2)+"%"}))),
+   h("td",{class:"c-age num"},ago(r.touch))))
+   :[h("tr",null,h("td",{class:"c-none sub",colspan:"4"},byG[g.k].length?"No copies match this filter.":"No copies in this group."))];
+  const d=h("details",{id:g.k,class:"grp g-"+g.k,open:!shut[g.k]},
+   h("summary",{class:"ghead"},h("h3",null,key(g.k),g.t),h("span",{class:"meta"},nc(rs.length)+(rs.length?" \u00b7 "+held(rs):"")),h("span",{class:"act"},g.a)),
+   h("div",{class:"tablewrap"},h("table",{class:"copies"},h("colgroup",null,h("col",{class:"w-name"}),h("col",null),h("col",{class:"w-size"}),h("col",{class:"w-age"})),h("thead",null,h("tr",null,h("th",{scope:"col"},"Copy"),h("th",{scope:"col"},META.redact?"Why it is here":"Why it is here \u00b7 the chat that made it"),h("th",{class:"num",scope:"col"},"Size"),h("th",{class:"num",scope:"col"},"Last touched"))),h("tbody",null,body))));
+  d.addEventListener("toggle",()=>{shut[g.k]=!d.open;});return d;}));}
+function goGroup(k){tipHide();const t=$(k);if(t){t.open=true;t.scrollIntoView({block:"start",behavior:calm?"auto":"smooth"});}}
+function jump(i){
+ tipHide();if(projSel.value||q.value){projSel.value="";q.value="";draw();}
+ const tr=$("c"+i);if(!tr)return;
+ tr.closest("details").open=true;
+ document.querySelectorAll("tr.hit").forEach(x=>x.classList.remove("hit"));
+ tr.classList.add("hit");tr.scrollIntoView({block:"center",behavior:calm?"auto":"smooth"});tr.focus({preventScroll:true});}
+if(projSel){
+ [...new Set(rows.map(r=>r.project))].sort().forEach(p=>projSel.append(h("option",null,p)));
+ projSel.addEventListener("change",draw);q.addEventListener("input",draw);sortSel.addEventListener("change",draw);}
+
+function sized(){drawScale();drawTime();drawScatter();}
+drawSummary();drawWhy();drawProjects();draw();sized();
+const wrap=document.querySelector(".wrap");let lastW=wrap.clientWidth,timer=0;
+function resized(){const w=wrap.clientWidth;if(w===lastW)return;lastW=w;clearTimeout(timer);timer=setTimeout(()=>{tipHide();sized();},80);}
+if(window.ResizeObserver)new ResizeObserver(resized).observe(wrap);else window.addEventListener("resize",resized);
+})();
+</script>
+</body></html>
