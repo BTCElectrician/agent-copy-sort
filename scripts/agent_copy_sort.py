@@ -2431,8 +2431,8 @@ function drawTime(){
    :"History is off for this scan (--no-history), so there is no trend to draw.";
   return;}
  const F=P.filter(p=>p.free!=null),L=P[P.length-1];
- if(F.length>=2){const a=F[0],z=F[F.length-1],dl=z.free-a.free;
-  title.textContent=Math.abs(dl)<0.05?"Free space is level since "+day(a.t):"Free space is "+(dl<0?"down ":"up ")+Math.abs(dl).toFixed(1)+" GB since "+day(a.t);
+ if(F.length>=2){const a=F[0],z=F[F.length-1],dl=z.free-a.free,since=(z.t-a.t<3*86400?dayTime:day)(a.t);
+  title.textContent=Math.abs(dl)<0.05?"Free space is level since "+since:"Free space is "+(dl<0?"down ":"up ")+Math.abs(dl).toFixed(1)+" GB since "+since;
   note.textContent=F.length+" scans on record: "+a.free+" GB free at the first, "+z.free+" GB now. Agent copies went from "+gb(add(P[0].mb))+" to "+gb(add(L.mb))+" over the same time. Each dot is one scan; nothing is known between them.";}
  else{title.textContent=F.length?"Free space: "+F[0].free+" GB at this scan":"Free space at each scan";
   note.textContent="This is the first scan on record with these settings. Each later scan adds a dot, so a trend shows from the second scan on.";}
