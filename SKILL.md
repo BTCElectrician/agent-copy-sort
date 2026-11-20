@@ -33,10 +33,17 @@ private), `--root <folder>` for repositories outside the usual places,
 `--temp-root <folder>`, `--recent-days N` (default 4), `--time-limit S`
 (a best-effort budget: every git and helper command is bounded by it and
 long loops stop at it, but one large file hash can run past it),
-`--no-github`, `--redact` (also write a shareable page). Each scan writes its
-own plan file `scan-<stamp>.json` and page `report-<stamp>.html`; earlier
-plans are never overwritten. The only files a scan deletes are its own plans
-and pages older than 14 days. It needs `git`; `gh`, `lsof` and `tmutil` are
+`--no-github`, `--redact` (also write a shareable page), `--no-history`. Each
+scan writes its own plan file `scan-<stamp>.json` and page
+`report-<stamp>.html`; earlier plans are never overwritten. The only files a
+scan deletes are its own plans and pages older than 14 days.
+
+Each scan also adds one entry to a private history file,
+`~/.local/state/agent-copy-sort/history.json`: the time, the disk's free and
+total space, and the count and size of each group. Numbers only, no paths or
+names, at most 400 scans. The page draws its free-space chart from it, using
+only scans run with the same folders and settings. `--no-history` neither
+reads nor writes it. The shareable page never includes it. It needs `git`; `gh`, `lsof` and `tmutil` are
 used when present. With `gh`, it asks GitHub about pull requests
 (`--no-github` turns that off). The page lists where it looked and what it
 could not check.
@@ -123,9 +130,15 @@ delete the specific leftover files with the user's yes) and scan again.
 
 ## 4. Present, then wait
 
-Open the page locally (for example `open report-<stamp>.html`). Give a plain
-summary: counts and space per group, what each "your call" item holds, and
-your recommendation. Disk context (free space, Time Machine local snapshots,
+Open the page locally (for example `open report-<stamp>.html`). It is one
+self-contained file that asks the network for nothing. It leads with what can
+go and how much space that is, draws the disk to scale with every copy as a
+block, then free space at each past scan, what holds the "your call" copies,
+copies by project, size against age, and every copy in a filterable table.
+Each chart has a table view and shows details on hover, tap or the arrow keys.
+Give a plain summary: counts and space per group, what each "your call" item
+holds, and your recommendation. Sizes are folder sizes, an upper limit on the
+space a removal gives back, so say "up to". Disk context (free space, Time Machine local snapshots,
 empty leftover folders) is shown separately; snapshots are a separate
 decision.
 
