@@ -2090,16 +2090,19 @@ def record_history(state, report, now):
 # every chart also names its groups in text, so color never works alone.
 _DARK = ('--bg:#11161d;--ink:#f1f4f8;--ink2:#d6dde6;--rule:#3a4757;--hair:#232d39;--band:#1a222d;--axis:#77879a;'
          '--other:#566373;--wedge:#1a222d;--tipbg:#f1f4f8;--tipfg:#11161d;--focus:#9ec0ff;--hit:#3a3113;'
+         '--glow:rgba(57,135,229,.22);--glow2:rgba(25,158,112,.14);--dot:rgba(241,244,248,.13);'
          '--g-recent:#c98500;--g-decide:#3987e5;--g-done:#199e70;color-scheme:dark')
 
 STYLE = r"""<style>
 /* Layout: one report on one surface. The answer first (what can go and how much comes back), then the disk drawn
    to scale with the agent copies magnified so every copy is a block, then the trend, the reasons and every copy.
-   Color belongs to the four groups and to nothing else. */
+   Color belongs to the four groups; the one other use is a faint glow and dot pattern behind the headline,
+   drawn with gradients only (no image) and gone before the charts and tables begin. */
 :root{
  --bg:#ffffff;--ink:#111a24;--ink2:#2b3644;--rule:#c9d1db;--hair:#e4e9ef;--band:#eef2f6;--axis:#8793a2;
  --other:#a9b4c1;--wedge:#f0f3f7;--tipbg:#111a24;--tipfg:#ffffff;--focus:#1d4c96;--hit:#fff1c9;
  --g-inuse:#e34948;--g-recent:#eda100;--g-decide:#2a78d6;--g-done:#1baf7a;
+ --glow:rgba(42,120,214,.13);--glow2:rgba(27,175,122,.10);--dot:rgba(17,26,36,.13);
  --body:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
@@ -2107,8 +2110,11 @@ STYLE = r"""<style>
 :root[data-theme="dark"]{__DARK__}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;margin:0}
-.wrap{max-width:1080px;margin:0 auto;padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:48px}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;margin:0;position:relative}
+body::before,body::after{content:"";position:absolute;left:0;right:0;top:0;height:1100px;pointer-events:none;z-index:0}
+body::before{background:radial-gradient(900px 460px at 14% -6%,var(--glow),transparent 66%),radial-gradient(760px 420px at 96% 2%,var(--glow2),transparent 64%)}
+body::after{background:radial-gradient(var(--dot) 1px,transparent 1.4px) 0 0/22px 22px;-webkit-mask-image:radial-gradient(1100px 700px at 30% 0,#000 0,transparent 78%);mask-image:radial-gradient(1100px 700px at 30% 0,#000 0,transparent 78%)}
+.wrap{max-width:1080px;margin:0 auto;padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:48px;position:relative;z-index:1}
 h1{font-weight:650;font-size:clamp(28px,4.6vw,40px);line-height:1.12;letter-spacing:-.01em;margin:0;text-wrap:balance}
 h2{font-weight:650;font-size:clamp(20px,2.6vw,24px);line-height:1.25;margin:0;text-wrap:balance}
 h3{font-weight:650;font-size:17px;line-height:1.3;margin:0}
