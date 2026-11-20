@@ -321,6 +321,18 @@ temp folder with its own `HOME`; nothing outside it is scanned or removed.
 | `docs/index.html` | The live demo page |
 | `.github/workflows/test.yml` | CI: tests on both platforms and a check against the Agent Skills spec |
 
+## Contributions
+
+Bug reports and ideas are welcome as
+[issues](https://github.com/BTCElectrician/agent-copy-sort/issues). Pull
+requests are not accepted. This tool removes things from your disk, so every
+change to it goes through the maintainer's own review and tests before it
+ships.
+
+The most useful bug report says what you expected, what happened, and
+includes the page from `scan --redact`, which has paths, names and ids
+removed.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
