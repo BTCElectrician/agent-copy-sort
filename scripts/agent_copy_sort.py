@@ -2285,6 +2285,7 @@ const sum=rs=>rs.reduce((t,r)=>t+(r.mb||0),0),add=a=>a.reduce((t,v)=>t+v,0);
 const gb=mb=>mb==null?"not measured":mb>=1024?(mb/1024).toFixed(1)+" GB":Math.round(mb)+" MB";
 const ago=d=>d==null?"no date":d<1?"today":d<2?"1 day ago":Math.round(d)+" days ago";
 const nc=n=>n+(n===1?" copy":" copies");
+const held=rs=>rs.some(r=>r.mb!=null)?gb(sum(rs)):"not measured";
 const pct=f=>f>=0.0995?Math.round(f*100)+"%":f>=0.001?(f*100).toFixed(1)+"%":"under 0.1%";
 const clip=(t,n)=>{t=String(t==null?"":t);return t.length>n?t.slice(0,n-1)+"\u2026":t;};
 const fmtD=new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric"});
@@ -2390,7 +2391,7 @@ function drawScale(){
   wsvg.setAttribute("viewBox","0 0 "+w+" "+H);const[p,l1,l2]=wsvg.children;
   p.setAttribute("points",x0+",0 "+x1+",0 "+w+","+H+" 0,"+H);
   put(l1,{x1:x0,y1:0,x2:0,y2:H},[]);put(l2,{x1:x1,y1:0,x2:w,y2:H},[]);}
- const un=rows.length-meas.length,cap=$("scale-cap");
+ const un=rows.filter(r=>r.mb==null).length,cap=$("scale-cap");
  if(cap)cap.textContent=!tot?"No copy had its size measured in this scan, so nothing can be drawn to scale. The groups and counts below still hold.":((factor>=1.5?"The agent copies are drawn "+(factor>=10?Math.round(factor):factor.toFixed(1))+"\u00d7 larger than on the disk above. ":"")
   +"Each block is one copy, widest first in its group; a pale block stands for several small ones. Hover or tap a block for details, or use the arrow keys."
   +(un?" "+nc(un)+" had no size measured and "+(un===1?"is":"are")+" not drawn.":""));
@@ -2399,7 +2400,7 @@ function drawSummary(){
  const b=$("sum");if(!b)return;
  b.replaceChildren(...G.map(g=>{const rs=byG[g.k],a=h("a",{href:"#"+g.k},g.t);a.addEventListener("click",e=>{e.preventDefault();goGroup(g.k);});
   return h("tr",{class:"g-"+g.k},h("td",null,key(g.k),a),
-  h("td",{class:"num"},nc(rs.length)),h("td",{class:"num"},!rs.length?"\u2014":rs.some(r=>r.mb!=null)?gb(sum(rs)):"not measured"),h("td",null,g.a));}));}
+  h("td",{class:"num"},nc(rs.length)),h("td",{class:"num"},rs.length?held(rs):"\u2014"),h("td",null,g.a));}));}
 
 /* ---- free space at each scan, from the private history ---- */
 function linePlot(box,P,o){
@@ -2495,11 +2496,11 @@ function drawWhy(){
  const hasMb=sum(D)>0,items=Object.keys(by).map(c=>({c:c,rs:by[c]})).sort((a,b)=>sum(b.rs)-sum(a.rs)||b.rs.length-a.rs.length);
  $("why-h").textContent="What holds the "+nc(D.length).replace(" cop"," \u201cyour call\u201d cop");
  barRows($("reasons"),items.map(it=>{const top=it.rs.slice().sort((a,b)=>(b.mb||0)-(a.mb||0))[0];
-  return{label:name(it.c),total:hasMb?sum(it.rs):it.rs.length,value:gb(sum(it.rs))+" \u00b7 "+nc(it.rs.length),
-   segs:[{k:"decide",v:hasMb?sum(it.rs):it.rs.length,aria:name(it.c)+": "+nc(it.rs.length)+", "+gb(sum(it.rs)),
-    tip:()=>[h("div",{class:"tt"},name(it.c)),h("div",null,h("b",null,it.rs.length+" of "+D.length)," \u201cyour call\u201d copies \u00b7 "+gb(sum(it.rs))),h("div",null,"Largest: "+top.name+" ("+gb(top.mb)+")")],
+  return{label:name(it.c),total:hasMb?sum(it.rs):it.rs.length,value:held(it.rs)+" \u00b7 "+nc(it.rs.length),
+   segs:[{k:"decide",v:hasMb?sum(it.rs):it.rs.length,aria:name(it.c)+": "+nc(it.rs.length)+", "+held(it.rs),
+    tip:()=>[h("div",{class:"tt"},name(it.c)),h("div",null,h("b",null,it.rs.length+" of "+D.length)," \u201cyour call\u201d copies \u00b7 "+held(it.rs)),h("div",null,"Largest: "+top.name+" ("+gb(top.mb)+")")],
     act:()=>jump(top.i)}]};}));
- tv("why-tv",["Reason","Space","Copies"],items.map(it=>[name(it.c),gb(sum(it.rs)),it.rs.length]),[1,2]);
+ tv("why-tv",["Reason","Space","Copies"],items.map(it=>[name(it.c),held(it.rs),it.rs.length]),[1,2]);
 }
 function legend(id,shapes){const n=$(id);if(n)n.replaceChildren(...G.filter(g=>byG[g.k].length).map(g=>h("span",{class:"g-"+g.k},
  shapes?s("svg",{width:14,height:14,viewBox:"-7 -7 14 14","aria-hidden":"true"},s("path",{d:SHAPE[g.k](4.6)})):key(g.k),g.s)));}
@@ -2508,13 +2509,13 @@ function drawProjects(){
  let L=Object.keys(by).map(p=>({p:p,rs:by[p]})).sort((a,b)=>sum(b.rs)-sum(a.rs)||b.rs.length-a.rs.length);const ALL=L;
  if(L.length>9){const rest=L.slice(8);L=L.slice(0,8).concat([{p:rest.length+" other projects",rs:rest.flatMap(x=>x.rs),rest:true}]);}
  if(L.length>1&&sum(L[0].rs)>0)$("proj-h").textContent=L[0].p+" holds the most: "+gb(sum(L[0].rs))+" in "+nc(L[0].rs.length);
- barRows(box,L.map(it=>({label:it.p,total:it.rest?0:sum(it.rs),value:gb(sum(it.rs))+" \u00b7 "+nc(it.rs.length),
+ barRows(box,L.map(it=>({label:it.p,total:it.rest?0:sum(it.rs),value:held(it.rs)+" \u00b7 "+nc(it.rs.length),
   segs:it.rest?[]:GK.map(k=>{const rs=it.rs.filter(r=>r.g===k);return{k:k,v:sum(rs),aria:it.p+", "+G[GI[k]].s+": "+gb(sum(rs))+" in "+nc(rs.length),
    tip:()=>[h("div",{class:"tt"},it.p),h("div",null,key(k),h("b",null,gb(sum(rs)))," "+G[GI[k]].s+" \u00b7 "+nc(rs.length)),h("div",null,gb(sum(it.rs))+" in all "+nc(it.rs.length))],
    act:()=>goGroup(k)};})})),true);
  if(L[L.length-1].rest)$("proj-note").textContent+=" The eight largest are drawn; the rest are summed on the last line and listed in the table.";
  legend("proj-lg",false);
- tv("proj-tv",["Project"].concat(G.map(g=>g.s),["All","Copies"]),ALL.map(it=>[it.p].concat(GK.map(k=>{const rs=it.rs.filter(r=>r.g===k);return rs.length?gb(sum(rs)):"\u2014";}),[gb(sum(it.rs)),it.rs.length])),[1,2,3,4,5,6]);
+ tv("proj-tv",["Project"].concat(G.map(g=>g.s),["All","Copies"]),ALL.map(it=>[it.p].concat(GK.map(k=>{const rs=it.rs.filter(r=>r.g===k);return rs.length?gb(sum(rs)):"\u2014";}),[held(it.rs),it.rs.length])),[1,2,3,4,5,6]);
 }
 
 /* ---- size against age: one mark per copy, shape and color by group ---- */
@@ -2541,8 +2542,9 @@ function drawScatter(){
  svg.append(s("text",{x:W,y:H-3,"text-anchor":"end"},"days since last touched \u2192"));
  const ring=s("circle",{class:"ring",r:10,visibility:"hidden"});
  P.forEach(r=>svg.append(s("path",{class:"pt g-"+r.g,d:SHAPE[r.g](4.6),transform:"translate("+xs(r.touch)+","+ys(r.mb)+")"})));
- const top=P.slice().sort((a,b)=>b.mb-a.mb)[0],tx=xs(top.touch),ty=ys(top.mb),end=tx>W*0.55;
- svg.append(s("line",{class:"lead",x1:tx,y1:ty-7,x2:tx,y2:ty-13}),s("text",{class:"strong",x:tx+(end?6:-6),y:ty-17,"text-anchor":end?"end":"start"},clip(top.name,W<520?22:34)+" \u00b7 "+gb(top.mb)),ring);
+ const top=P.slice().sort((a,b)=>b.mb-a.mb)[0],tx=xs(top.touch),ty=ys(top.mb),lbl=clip(top.name,W<520?20:30)+" \u00b7 "+gb(top.mb),half=lbl.length*4.3+4;
+ const tlab=s("text",{class:"strong",x:Math.max(half,Math.min(W-half,tx)),y:ty-17,"text-anchor":"middle"},lbl);
+ svg.append(s("line",{class:"lead",x1:tx,y1:ty-7,x2:tx,y2:ty-13}),tlab,ring);
  let cur=-1,armed=false;
  const clear=()=>{ring.setAttribute("visibility","hidden");cur=-1;};
  const at=(i,pt)=>{cur=i;const r=P[i],x=xs(r.touch),y=ys(r.mb);put(ring,{cx:x,cy:y,visibility:"visible"},[]);
@@ -2559,6 +2561,9 @@ function drawScatter(){
   if(dlt){e.preventDefault();at(Math.max(0,Math.min(P.length-1,(cur<0?P.length-1:cur)+dlt)));}
   else if(e.key==="Enter"&&cur>=0){e.preventDefault();jump(P[cur].i);}});
  box.append(svg);
+ /* Measured now that it is on the page: the one label never leaves the plot. */
+ const bb=tlab.getBBox(),lx=+tlab.getAttribute("x");
+ if(bb.x<2)tlab.setAttribute("x",lx+2-bb.x);else if(bb.x+bb.width>W-2)tlab.setAttribute("x",lx-(bb.x+bb.width-W+2));
 }
 
 /* ---- every copy, in four filterable tables ---- */
@@ -2577,7 +2582,7 @@ function draw(){
    h("td",{class:"c-age num"},ago(r.touch))))
    :[h("tr",null,h("td",{class:"c-none sub",colspan:"4"},byG[g.k].length?"No copies match this filter.":"No copies in this group."))];
   const d=h("details",{id:g.k,class:"grp g-"+g.k,open:!shut[g.k]},
-   h("summary",{class:"ghead"},h("h3",null,key(g.k),g.t),h("span",{class:"meta"},nc(rs.length)+" \u00b7 "+gb(sum(rs))),h("span",{class:"act"},g.a)),
+   h("summary",{class:"ghead"},h("h3",null,key(g.k),g.t),h("span",{class:"meta"},nc(rs.length)+(rs.length?" \u00b7 "+held(rs):"")),h("span",{class:"act"},g.a)),
    h("div",{class:"tablewrap"},h("table",{class:"copies"},h("colgroup",null,h("col",{class:"w-name"}),h("col",null),h("col",{class:"w-size"}),h("col",{class:"w-age"})),h("thead",null,h("tr",null,h("th",{scope:"col"},"Copy"),h("th",{scope:"col"},META.redact?"Why it is here":"Why it is here \u00b7 the chat that made it"),h("th",{class:"num",scope:"col"},"Size"),h("th",{class:"num",scope:"col"},"Last touched"))),h("tbody",null,body))));
   d.addEventListener("toggle",()=>{shut[g.k]=!d.open;});return d;}));}
 function goGroup(k){tipHide();const t=$(k);if(t){t.open=true;t.scrollIntoView({block:"start",behavior:calm?"auto":"smooth"});}}
