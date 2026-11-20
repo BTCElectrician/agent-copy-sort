@@ -10,6 +10,47 @@ say yes. It is written for Claude Code and Codex. Because it uses the open
 other tools that read that format can load it too, though it has not been
 exercised there.
 
+## What you get
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/report-desktop-dark.png">
+  <img alt="The report page: 16 finished copies can come off this disk, up to 9.6 GB. Below it the disk is drawn to scale and the agent copies are magnified so each copy is one block, colored by group, followed by free space at each past scan." src="docs/img/report-desktop-light.png">
+</picture>
+
+Every scan writes this page. It answers one question first: what can I
+safely remove, and how much space do I get back? Then it shows the disk drawn
+to scale with the agent copies magnified (each block is one copy), free
+space at each past scan, what is holding the copies that need your decision,
+which projects pile up copies, and every copy in a table you can filter.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/report-detail-dark.png">
+  <img alt="Further down the page: a ranked bar chart of what holds the your-call copies, copies by project split by group, and a scatter of size against age." src="docs/img/report-detail-light.png">
+</picture>
+
+It is one self-contained file. It loads no fonts, scripts or images from
+anywhere and makes no network requests. It works in light and dark, on a
+phone and on a desktop, with a keyboard, and every chart has a table view.
+
+<p>
+  <img alt="The same page at phone width, light theme." src="docs/img/report-phone-light.png" width="300">
+  <img alt="The same page at phone width, dark theme." src="docs/img/report-phone-dark.png" width="300">
+</p>
+
+The pictures above are the demo page: every project, name, path and number in
+them is invented ([`demo/demo-scan.json`](demo/demo-scan.json)). Render it
+yourself, without scanning anything:
+
+```bash
+python3 demo/render_demo.py --redact
+```
+
+Two things the page is careful about. Sizes are folder sizes, not exact
+reclaimable bytes: copies of one project can share storage, so the page says
+"up to". And the free-space chart draws only scans that were actually run,
+one dot each, from a small private history file (numbers only, at most 400
+scans, `--no-history` turns it off); nothing is assumed between them.
+
 ## The problem
 
 Coding agents give every task its own copy of your project so parallel work
@@ -35,8 +76,8 @@ From the outside, a finished copy and an important one look the same.
    active**, **your call**, and **finished**. The scan changes no copy.
 2. **You review.** Anything uncertain, or any check that failed, lands in
    "your call", never in "finished". The page says why for each copy. A
-   `--redact` option writes a second page with paths, names and ids removed
-   if you need to share it.
+   `--redact` option writes a second page with paths, names, ids and the
+   scan history removed if you need to share it.
 3. **Remove what you approve.** `remove` takes the plan and the ids you
    approved. Without `--confirm` it is a dry run. With it, every copy is
    checked again from scratch right before acting, including a live
@@ -62,9 +103,10 @@ From the outside, a finished copy and an important one look the same.
 - It never removes your original repositories: anything found under your
   usual project folders or a `--root` you name is protected, as are main
   checkouts and repositories other copies depend on.
-- It does not upload anything. The page and plan stay on your computer. With
-  `gh` installed it asks GitHub about pull requests; `--no-github` turns
-  that off.
+- It does not upload anything. The page, the plan and the scan history stay
+  on your computer, in a folder only you can read, and the page itself makes
+  no network requests. With `gh` installed it asks GitHub about pull
+  requests; `--no-github` turns that off.
 - It does not find copies outside the usual agent folders and temp folders.
   `--root` and `--temp-root` add more places to look.
 
@@ -147,6 +189,8 @@ temp folder with its own `HOME`; nothing outside it is scanned or removed.
 | `SKILL.md` | Instructions the agent loads when the skill triggers |
 | `scripts/agent_copy_sort.py` | The scanner and remover (standard library only) |
 | `tests/` | Tests, run on macOS and Linux in CI |
+| `demo/` | An invented scan and a script that renders the report page from it |
+| `docs/img/` | The pictures in this README, made from the demo page |
 | `.github/workflows/test.yml` | CI: tests on both platforms and a check against the Agent Skills spec |
 
 ## License

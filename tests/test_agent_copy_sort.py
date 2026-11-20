@@ -12,6 +12,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -1195,6 +1197,290 @@ class WordingTest(Base):
         self.assertIn('No working copy is changed', text)
         self.assertIn('best-effort', text)
         self.assertNotIn('real overall budget', SCRIPT.read_text())
+
+
+# ------------------------------------------------------------ the report page
+
+DEMO = Path(__file__).parents[1] / 'demo' / 'render_demo.py'
+_dspec = importlib.util.spec_from_file_location('render_demo', DEMO)
+render_demo = importlib.util.module_from_spec(_dspec)
+_dspec.loader.exec_module(render_demo)
+
+# Anything that could make a browser ask another machine for something.
+NETWORK_MARKS = ('http://', 'https://', 'ftp://', 'ws://', 'wss://', '//www', 'data:', 'blob:', 'src=', 'srcset', 'url(', '@import',
+                 '@font-face', '<link', '<img', '<image', '<iframe', '<frame', '<object', '<embed', '<video',
+                 '<audio', '<source', '<track', '<form', '<base', 'action=', 'ping=', 'xlink', 'fetch(', 'XMLHttp',
+                 'WebSocket', 'EventSource', 'sendBeacon', 'importScripts', 'import(', 'Worker(',
+                 'navigator.', 'location', 'document.cookie', 'window.open', 'http-equiv')
+
+
+def page_data(page, name):
+    """The JSON a page embeds as `const NAME=...;`, exactly as a browser would read it."""
+    raw = page.split(f'const {name}=', 1)[1].split(';\n', 1)[0]
+    return raw, json.loads(raw)
+
+
+def assert_no_network(case, page):
+    for mark in NETWORK_MARKS:
+        case.assertNotIn(mark, page, f'the page must not reference {mark!r}')
+    case.assertEqual(page.count('<script'), 1, 'one inline script, nothing else')
+    case.assertEqual(page.count('</script>'), 1)
+    case.assertNotIn('<script ', page, 'the script tag carries no src or other attribute')
+    for target in re.findall(r'href\s*[=:]\s*["\']?([^"\'\s>+]*)', page):
+        case.assertTrue(target in ('', '#') or target.startswith('#'), f'only in-page links are allowed: {target!r}')
+    case.assertIn('<meta name="referrer" content="no-referrer">', page)
+
+
+class DemoPageTest(unittest.TestCase):
+    """The synthetic demo runs through the same render_html() a real scan uses."""
+
+    def setUp(self):
+        self.report, self.history = render_demo.build(acs)
+        self.page = acs.render_html(self.report, history=self.history)
+        self.share = acs.render_html(self.report, redact=True, history=self.history)
+
+    def test_demo_pages_make_no_network_references(self):
+        assert_no_network(self, self.page)
+        assert_no_network(self, self.share)
+
+    def test_demo_page_says_what_can_go_and_that_sizes_are_not_exact(self):
+        self.assertIn('<h1>16 finished copies can come off this disk</h1>', self.page)
+        self.assertIn('<small>up to</small>9.6 GB', self.page)
+        self.assertIn('not exact reclaimable bytes', self.page)
+        self.assertIn('How sure these numbers are', self.page)
+        self.assertIn('Private to this computer', self.page)
+
+    def test_page_supports_both_themes_keyboard_focus_and_reduced_motion(self):
+        for needle in ('prefers-color-scheme:dark', ':root[data-theme="dark"]', ':root:not([data-theme="light"])',
+                       ':focus-visible', 'prefers-reduced-motion:reduce', 'width=device-width',
+                       'env(safe-area-inset-left', 'system-ui'):
+            self.assertIn(needle, self.page, needle)
+        # Every chart has a table twin and the detail layer answers to keys as well as the pointer.
+        for chart in ('time-tv', 'why-tv', 'proj-tv', 'age-tv'):
+            self.assertIn(f'<details class="tv" id="{chart}">', self.page)
+        self.assertIn('ArrowRight', self.page)
+
+    def test_demo_history_reaches_the_private_page_only(self):
+        _, meta = page_data(self.page, 'META')
+        self.assertEqual(meta['histState'], 'on')
+        self.assertEqual(len(meta['hist']), 13)
+        self.assertEqual(set(meta['hist'][0]), {'t', 'free', 'mb', 'n', 'partial'})
+        raw, shared = page_data(self.share, 'META')
+        self.assertEqual((shared['histState'], shared['hist'], shared['histCount']), ('hidden', [], 13))
+        for point in self.history[:-1]:
+            self.assertNotIn(str(point['t']), self.share)
+        self.assertNotIn(self.history[0]['scope'], self.page + self.share)
+
+    def test_history_from_other_settings_is_not_drawn(self):
+        other = [dict(p, scope='0' * 12) for p in self.history]
+        _, meta = page_data(acs.render_html(self.report, history=other), 'META')
+        self.assertEqual((meta['histState'], meta['hist'], meta['histCount']), ('on', [], 0))
+        _, off = page_data(acs.render_html(self.report), 'META')
+        self.assertEqual(off['histState'], 'off')
+
+    def test_shareable_demo_page_has_no_demo_names_anywhere(self):
+        seeds = {'/Users/sam', 'sam/'}
+        for c in self.report['copies']:
+            seeds.update({c['name'], c['id'], c['project'], c['path']})
+            if c['chat']:
+                seeds.add(c['chat'].split(': ', 1)[-1])
+        for seed in sorted(s for s in seeds if len(s) > 4):
+            self.assertNotIn(seed, self.share, seed)
+        raw, rows = page_data(self.share, 'ROWS')
+        self.assertEqual({r['name'] for r in rows}, {f'copy {n}' for n in range(1, len(rows) + 1)})
+        self.assertTrue(all(re.fullmatch(r'project \d+', r['project']) for r in rows))
+        self.assertTrue(all(r['id'] == '' and r['path'] == '' and r['chat'] is None for r in rows))
+
+    def test_script_data_cannot_close_or_open_a_tag(self):
+        bad = 'x</script><script>alert(1)</script><!-- ]]> \u2028 \u2029 <img src=x onerror=alert(1)>'
+        report = json.loads(json.dumps(self.report))
+        for c in report['copies']:
+            c.update(name=bad, why=bad, chat=bad, project=bad, path='/tmp/' + bad, kind=bad)
+        report['warnings'] = [bad]
+        report['stores'] = [{'name': bad, 'path': bad, 'state': bad, 'detail': bad}]
+        report['leftovers']['non_git'] = ['/tmp/' + bad]
+        report['generated_at'] = bad
+        report['changed_note'] = bad
+        for redact in (False, True):
+            page = acs.render_html(report, redact=redact, history=self.history)
+            self.assertEqual(page.count('<script'), 1)
+            self.assertEqual(page.count('</script>'), 1)
+            self.assertNotIn('<img', page)
+            self.assertNotIn('<!--', page)
+            for name in ('ROWS', 'META'):
+                raw, _ = page_data(page, name)
+                self.assertNotIn('<', raw)
+                self.assertNotIn('\u2028', raw)
+                self.assertNotIn('\u2029', raw)
+        raw, rows = page_data(acs.render_html(report, history=self.history), 'ROWS')
+        self.assertIn('\\u003c/script>', raw)
+        self.assertEqual(rows[0]['name'], bad, 'the data still round-trips exactly')
+
+    def test_edge_case_reports_render(self):
+        empty = dict(self.report, copies=[])
+        self.assertIn('No agent copies were found', acs.render_html(empty, history=None))
+        none_done = dict(self.report, copies=[c for c in self.report['copies'] if c['group'] != 'done'])
+        self.assertIn('No copy is ready to remove yet', acs.render_html(none_done, history=self.history))
+        unmeasured = dict(self.report, copies=[dict(c, size_mb=None) for c in self.report['copies']], disk={})
+        page = acs.render_html(unmeasured, history=self.history[-1:])
+        self.assertIn('No copy had its size measured', page)
+        self.assertNotIn('class="fig"', page)
+
+    @unittest.skipUnless(shutil.which('node'), 'node is not installed')
+    def test_page_script_parses(self):
+        with tempfile.TemporaryDirectory() as d:
+            for n, page in enumerate((self.page, self.share)):
+                js = Path(d) / f'page{n}.js'
+                js.write_text(page.split('<script>', 1)[1].rsplit('</script>', 1)[0])
+                res = subprocess.run(['node', '--check', str(js)], capture_output=True, text=True)  # ubs:ignore -- argv list
+                self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_demo_script_writes_both_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'demo.html'
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(render_demo.main(['--out', str(out), '--redact']), 0)
+            self.assertEqual(out.read_text(), self.page)
+            self.assertEqual((Path(d) / 'demo-shareable.html').read_text(), self.share)
+
+
+class ScanHistoryTest(Base):
+    def state(self):
+        return self.home / '.local' / 'state' / 'agent-copy-sort'
+
+    def history_file(self):
+        return self.state() / 'history.json'
+
+    def test_scan_history_is_private_numbers_only_and_reaches_the_page(self):
+        wt = self.worktree('histsecret-wt')
+        self.owner(wt, days_ago=9, title='HIST-SECRET-TITLE')
+        self.scan()
+        self.scan()
+        self.assertEqual(stat.S_IMODE(os.stat(self.state()).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(self.history_file()).st_mode), 0o600)
+        text = self.history_file().read_text()
+        for seed in ('histsecret-wt', 'HIST-SECRET-TITLE', str(self.base), 'proj', 'main'):
+            self.assertNotIn(seed, text, seed)
+        data = json.loads(text)
+        self.assertEqual(len(data['points']), 2)
+        for p in data['points']:
+            self.assertEqual(set(p), {'t', 'scope', 'free', 'total', 'snaps', 'n', 'mb', 'partial'})
+            self.assertRegex(p['scope'], r'^[0-9a-f]{12}$')
+            flat = [p['t'], p['free'], p['total'], p['partial'], *p['n'], *p['mb']]
+            self.assertTrue(all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in flat), p)
+            self.assertGreaterEqual(sum(p['n']), 1)
+        pages = sorted(self.out.glob('report-*.html'), key=os.path.getmtime)
+        _, meta = page_data(pages[-1].read_text(), 'META')
+        self.assertEqual((meta['histState'], len(meta['hist'])), ('on', 2))
+        assert_no_network(self, pages[-1].read_text())
+        # The plan a later `remove` reads is unchanged by the history: it carries none of it.
+        self.assertNotIn('history', json.loads(self.latest_plan().read_text()))
+
+    def test_no_history_flag_reads_and_writes_nothing(self):
+        self.worktree('nohist')
+        self.scan('--no-history')
+        self.assertFalse(self.history_file().exists())
+        _, meta = page_data(next(self.out.glob('report-*.html')).read_text(), 'META')
+        self.assertEqual((meta['histState'], meta['hist']), ('off', []))
+
+    def test_shareable_scan_page_carries_no_private_strings_in_chart_data(self):
+        other = self.home / 'Desktop' / 'secretproject-qqq'
+        other.mkdir(parents=True)
+        git(other, 'init')
+        (other / 'a.txt').write_text('a')
+        git(other, 'add', '.')
+        git(other, 'commit', '-m', 'first')
+        path = other / '.claude' / 'worktrees' / 'secretbranch-zzz'
+        git(other, 'worktree', 'add', '-b', 'secretbranch-zzz', str(path))
+        (path / 'secretfile-kkk.txt').write_text('x')
+        self.age(path)
+        wt = self.worktree('secretname-xyz')
+        (wt / 'secretfile-abc.txt').write_text('x')
+        self.age(wt)
+        self.owner(wt, days_ago=9, title='SECRET-TITLE-123')
+        self.scan()
+        rows = self.scan('--redact')
+        share = sorted(self.out.glob('report-*-shareable.html'), key=os.path.getmtime)[-1].read_text()
+        points = json.loads(self.history_file().read_text())['points']
+        seeds = ['secretproject-qqq', 'secretbranch-zzz', 'secretfile-kkk', 'secretname-xyz', 'secretfile-abc',
+                 'SECRET-TITLE-123', str(self.base), str(self.home), 'Desktop', points[0]['scope'], str(points[0]['t']),
+                 *[r['id'] for r in rows.values()]]
+        for seed in seeds:
+            self.assertNotIn(seed, share, seed)
+        assert_no_network(self, share)
+        _, shown = page_data(share, 'ROWS')
+        self.assertEqual(len(shown), len(rows))
+        for r in shown:
+            self.assertEqual(set(r), {'g', 'tool', 'mb', 'touch', 'codes', 'id', 'name', 'why', 'chat', 'path', 'project'})
+            self.assertRegex(r['name'], r'^copy \d+$')
+            self.assertRegex(r['project'], r'^project \d+$')
+            self.assertEqual((r['id'], r['path'], r['chat']), ('', '', None))
+            self.assertTrue(set(r['codes']) <= set(acs.REDACTED_TEXT))
+            self.assertIn(r['tool'], ('Claude Code', 'Codex', 'Cursor', 'Temp folder', 'Other worktree'))
+        _, meta = page_data(share, 'META')
+        self.assertEqual((meta['histState'], meta['hist'], meta['histCount']), ('hidden', [], 2))
+        self.assertEqual(set(meta), {'groups', 'disk', 'reasons', 'redact', 'histState', 'histCount', 'hist'})
+
+    def test_history_is_bounded_and_keeps_the_newest(self):
+        report, _ = render_demo.build(acs)
+        state = self.base / 'state'
+        now = time.time()
+        with mock.patch.object(acs, 'HISTORY_MAX_POINTS', 5):
+            for n in range(12):
+                kept = acs.record_history(state, report, now - (12 - n) * 3600)
+        self.assertEqual(len(kept), 5)
+        self.assertEqual([p['t'] for p in kept], [int(now - k * 3600) for k in (5, 4, 3, 2, 1)])
+        self.assertEqual(len(json.loads((state / 'history.json').read_text())['points']), 5)
+        self.assertLess((state / 'history.json').stat().st_size, 4096)
+        # At the real cap the file stays far below the byte limit it is read with.
+        full = [dict(kept[0], t=kept[0]['t'] - k) for k in range(acs.HISTORY_MAX_POINTS)]
+        size = len(json.dumps({'tool': acs.TOOL, 'version': 1, 'points': full}, separators=(',', ':')))
+        self.assertLess(size, acs.HISTORY_MAX_BYTES // 2)
+
+    def test_history_ignores_what_it_cannot_trust(self):
+        report, _ = render_demo.build(acs)
+        state = acs.ensure_private_dir(self.base / 'state')
+        hist = state / 'history.json'
+        now = time.time()
+        good = acs.history_point(report, now - 60)
+        junk = [dict(good, free='<script>'), dict(good, scope='../../etc'), dict(good, n=[1, 2]), dict(good, t=now + 9e6),
+                dict(good, mb=[1, 2, 3, float('1e99')]), dict(good, t=True), 'text', None, dict(good, name='/Users/x')]
+        hist.write_text(json.dumps({'tool': acs.TOOL, 'points': junk + [good]}))
+        kept = acs.load_history(state, now)
+        self.assertEqual(len(kept), 2, 'the good point and the one whose only fault was an extra key')
+        self.assertTrue(all(set(p) == set(good) for p in kept), 'extra keys never come back')
+        self.assertNotIn('/Users/x', json.dumps(kept))
+        # Not ours, not JSON, or too big: treated as no history, then replaced on the next scan.
+        for body in (json.dumps({'tool': 'other', 'points': [good]}), '{not json', 'x' * (acs.HISTORY_MAX_BYTES + 1)):
+            hist.write_text(body)
+            self.assertEqual(acs.load_history(state, now), [])
+        self.assertEqual(len(acs.record_history(state, report, now)), 1)
+        self.assertEqual(stat.S_IMODE(os.stat(hist).st_mode), 0o600)
+        # A symlink is never read through or written through.
+        victim = self.base / 'victim.json'
+        victim.write_text(json.dumps({'tool': acs.TOOL, 'points': [good]}))
+        hist.unlink()
+        hist.symlink_to(victim)
+        self.assertEqual(acs.load_history(state, now), [])
+        self.assertEqual(len(acs.record_history(state, report, now)), 1)
+        self.assertFalse(hist.is_symlink())
+        self.assertEqual(json.loads(victim.read_text())['points'], [good])
+        # A history folder other users could read is refused rather than used.
+        loose = self.base / 'loose'
+        loose.mkdir(mode=0o755)
+        os.chmod(loose, 0o755)
+        with self.assertRaises(acs.OutputError):
+            acs.record_history(loose, report, now)
+
+    def test_scan_still_succeeds_when_history_cannot_be_saved(self):
+        self.worktree('nostate')
+        self.state().parent.mkdir(parents=True)
+        self.state().write_text('a file where the state folder should be')
+        res = self.cli('scan')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn('scan history was not saved', res.stderr)
+        _, meta = page_data(next(self.out.glob('report-*.html')).read_text(), 'META')
+        self.assertEqual(meta['histState'], 'off')
 
 
 if __name__ == '__main__':
