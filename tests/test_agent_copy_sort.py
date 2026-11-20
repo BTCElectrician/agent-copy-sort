@@ -1348,6 +1348,59 @@ class DemoPageTest(unittest.TestCase):
         assert_no_network(self, hosted.replace(render_demo.SITE_STRIP, ''))
         self.assertTrue((site.parent / '.nojekyll').exists(), 'GitHub Pages must serve the file as it is')
 
+    def pure_helpers(self, expression):
+        """Run the page script's own pure helpers (sizes, changes, strip labels) in node; return the result."""
+        js = self.page.split('<script>', 1)[1].rsplit('</script>', 1)[0]
+        pure = js.split('/* pure:start', 1)[1].split('*/', 1)[1].split('/* pure:end */', 1)[0]
+        self.assertNotIn('document', pure)
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'pure.js'
+            f.write_text(pure + '\nconsole.log(JSON.stringify(' + expression + '));\n')
+            res = subprocess.run(['node', str(f)], capture_output=True, text=True)  # ubs:ignore -- argv list
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return json.loads(res.stdout)
+
+    @unittest.skipUnless(shutil.which('node'), 'node is not installed')
+    def test_a_size_and_its_change_share_a_unit(self):
+        got = self.pure_helpers('[gb(1021), gb(999), gb(1000), gb(3121), chg(1021, 3121), chg(-586, 4400), '
+                                'chg(2253, 7435), chg(30, 4400), chg(200, 800), chg(1500, 900), chg(0.4, 5000), '
+                                'gbLike(800, 27000), gbLike(40, 27000)]')
+        self.assertEqual(got, ['1.0 GB', '999 MB', '1.0 GB', '3.0 GB', '+1.0 GB', '\u22120.6 GB', '+2.2 GB', '+30 MB',
+                               '+200 MB', '+1.5 GB', '', '0.8 GB', '40 MB'])
+        # The header that used to read "3.0 GB (+1021 MB)": every change of 1,000 MB or more is in GB,
+        # and beside a total in GB a change of 100 MB or more is in GB too.
+        sweep = self.pure_helpers('[900, 990, 1000, 1021, 1023, 1024, 1500, 9999].map(d => [chg(d, 3000), chg(-d, 500), gb(d)])')
+        for up, down, size in sweep:
+            for text in (up, down, size):
+                self.assertNotRegex(text, r'\d{4,} MB', text)
+            self.assertTrue(up.endswith(' GB'), up)
+        self.assertEqual([acs._fmt_mb(v) for v in (999, 1000, 1021, 3121)], ['999 MB', '1.0 GB', '1.0 GB', '3.0 GB'])
+
+    @unittest.skipUnless(shutil.which('node'), 'node is not installed')
+    def test_every_group_in_the_strip_keeps_a_label_at_any_width(self):
+        # Label widths as a 14.5px system font draws them: [group, full label, short label].
+        labels = [['inuse', 95, 46], ['recent', 100, 52], ['decide', 112, 64], ['done', 110, 62]]
+        demo = [3121, 7435, 6921, 9827]          # the demo's four groups, in MB
+        tiny = [30, 7435, 6921, 9827]            # one group far too small to carry any label
+        cases = [(name, width, sizes) for name, sizes in (('demo', demo), ('tiny', tiny))
+                 for width in (343, 368, 600, 1048)]   # 343 px is the strip on a 375 px phone
+        runs = [[{'k': k, 'w': mb / sum(sizes) * width, 'full': full, 'short': short}
+                 for (k, full, short), mb in zip(labels, sizes)] for _, width, sizes in cases]
+        plans = self.pure_helpers(json.dumps(runs) + '.map(labelPlan)')
+        modes = {}
+        for (name, width, _), plan in zip(cases, plans):
+            self.assertEqual([x['k'] for x in plan['labels']], [k for k, _, _ in labels], (name, width, 'a group lost its label'))
+            modes[name, width] = plan['mode']
+            if plan['mode'] == 'list':
+                self.assertTrue(all(x['form'] == 'full' for x in plan['labels']))
+        self.assertEqual(modes['demo', 343], 'list', 'on a phone the labels move to the keyed list')
+        self.assertEqual(modes['demo', 1048], 'direct')
+        self.assertEqual(modes['tiny', 1048], 'list', 'one group too small for a label moves them all to the list')
+        # The page carries the list styling and never removes a strip label outright.
+        self.assertIn('.runlist{', self.page)
+        self.assertIn('labelPlan(runs)', self.page)
+        self.assertNotIn('sp.remove()', self.page)
+
     def test_demo_script_writes_both_pages(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / 'demo.html'
