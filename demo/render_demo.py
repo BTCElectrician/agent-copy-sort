@@ -80,6 +80,20 @@ def build(acs, data=None):
 
 
 REPO_URL = 'https://github.com/BTCElectrician/agent-copy-sort'
+SITE_URL = 'https://btcelectrician.github.io/agent-copy-sort/'
+SITE_TITLE = 'agent-copy-sort live demo'
+SITE_ABOUT = ('The page agent-copy-sort writes after a scan: which copies of your code Claude Code, Codex and '
+              'Cursor left behind can go, and up to how much space that frees. Invented demo data.')
+# What a site shows when someone pastes the demo link: a title, a sentence and a picture. These are read by
+# the site that builds the link card; the page itself still loads nothing.
+SITE_CARD = (f'<meta name="description" content="{SITE_ABOUT}">\n'
+             '<meta property="og:type" content="website">\n'
+             f'<meta property="og:url" content="{SITE_URL}">\n'
+             f'<meta property="og:title" content="{SITE_TITLE}">\n'
+             f'<meta property="og:description" content="{SITE_ABOUT}">\n'
+             f'<meta property="og:image" content="{SITE_URL}card.png">\n'
+             '<meta property="og:image:width" content="1280">\n<meta property="og:image:height" content="640">\n'
+             '<meta name="twitter:card" content="summary_large_image">\n')
 SITE_STYLE = ('<style>.site-strip{font-size:15.5px;padding:11px 16px;border:1px solid var(--rule);border-radius:6px;'
               'max-width:none}.site-strip a{font-weight:650;text-underline-offset:3px}</style>\n')
 SITE_STRIP = ('<p class="site-strip"><b>Live demo.</b> This is the page agent-copy-sort writes after a scan. Every '
@@ -88,11 +102,13 @@ SITE_STRIP = ('<p class="site-strip"><b>Live demo.</b> This is the page agent-co
 
 def site_page(acs, report, history):
     """The hosted live demo: the tool's own page, plus one strip at the top that
-    says the data is invented and links to the repository. Nothing else differs."""
+    says the data is invented and links to the repository, and the link-card
+    tags in the head. Nothing else differs."""
     page = acs.render_html(report, history=history)
-    head, wrap = '</head><body>\n', '<div class="wrap">\n'
-    assert page.count(head) == 1 and page.count(wrap) == 1
-    return page.replace(head, SITE_STYLE + head).replace(wrap, wrap + SITE_STRIP)
+    title, head, wrap = '<title>Agent Copy Sort</title>\n', '</head><body>\n', '<div class="wrap">\n'
+    assert page.count(title) == 1 and page.count(head) == 1 and page.count(wrap) == 1
+    # The card tags go first in the head, where every link-card builder reads them.
+    return page.replace(title, title + SITE_CARD).replace(head, SITE_STYLE + head).replace(wrap, wrap + SITE_STRIP)
 
 
 def main(argv=None):

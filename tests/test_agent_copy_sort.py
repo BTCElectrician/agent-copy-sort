@@ -1340,13 +1340,30 @@ class DemoPageTest(unittest.TestCase):
         hosted = site.read_text()
         self.assertEqual(hosted, render_demo.site_page(acs, self.report, self.history),
                          'docs/index.html is stale: run python3 demo/render_demo.py --site')
-        self.assertEqual(hosted.replace(render_demo.SITE_STYLE, '').replace(render_demo.SITE_STRIP, ''), self.page)
-        # The one outside address on the hosted page is the link back to the repository; nothing is loaded.
-        self.assertEqual(hosted.count('https://'), 1)
+        bare = hosted.replace(render_demo.SITE_CARD, '').replace(render_demo.SITE_STYLE, '')
+        self.assertEqual(bare.replace(render_demo.SITE_STRIP, ''), self.page)
+        # The only outside addresses on the hosted page are its own, its card picture and the repository.
+        allowed = {render_demo.SITE_URL, render_demo.SITE_URL + 'card.png', render_demo.REPO_URL}
+        self.assertEqual(set(re.findall(r'https://[^"\s<]+', hosted)), allowed)
         self.assertEqual(hosted.count('http://'), 0)
         self.assertIn(f'<a href="{render_demo.REPO_URL}">', hosted)
-        assert_no_network(self, hosted.replace(render_demo.SITE_STRIP, ''))
+        # None of them is something the page loads: one link, and tags only a link-card builder reads.
+        assert_no_network(self, bare.replace(render_demo.SITE_STRIP, ''))
         self.assertTrue((site.parent / '.nojekyll').exists(), 'GitHub Pages must serve the file as it is')
+
+    def test_hosted_demo_gives_a_link_card_a_title_and_a_picture(self):
+        docs = Path(__file__).parents[1] / 'docs'
+        head = (docs / 'index.html').read_text().split('</head>', 1)[0]
+        for tag in ('og:title', 'og:description', 'og:image', 'og:url'):
+            self.assertEqual(head.count(f'<meta property="{tag}" content="'), 1, tag)
+        self.assertIn('<meta name="twitter:card" content="summary_large_image">', head)
+        self.assertIn(f'content="{render_demo.SITE_URL}card.png"', head)
+        self.assertIn('Invented demo data', render_demo.SITE_ABOUT)
+        card = (docs / 'card.png').read_bytes()
+        self.assertEqual(card[:8], b'\x89PNG\r\n\x1a\n')
+        width, height = int.from_bytes(card[16:20], 'big'), int.from_bytes(card[20:24], 'big')
+        self.assertEqual((width, height), (1280, 640), 'the size link cards expect')
+        self.assertLess(len(card), 1_000_000)
 
     def test_background_is_drawn_with_gradients_only_in_both_themes(self):
         for page in (self.page, self.share):
