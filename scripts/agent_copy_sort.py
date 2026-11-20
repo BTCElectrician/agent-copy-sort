@@ -2146,6 +2146,8 @@ section{display:flex;flex-direction:column;gap:14px;min-width:0;scroll-margin-to
 .wedge line{stroke:var(--rule);stroke-width:1}
 .runlabels{position:relative;height:28px;font-size:14.5px;color:var(--ink2)}
 .runlabels span{position:absolute;bottom:5px;white-space:nowrap}
+.runlist{margin:6px 0 8px}
+.runlist b{color:var(--ink);font-weight:650}
 .mag{display:flex;gap:2px;height:34px}
 .blk{background:var(--c);min-width:2px;height:100%;cursor:pointer}
 .blk.many{opacity:.5}
@@ -2282,7 +2284,21 @@ function put(n,a,kids){
  return n;}
 const h=(t,a,...k)=>put(document.createElement(t),a,k),s=(t,a,...k)=>put(document.createElementNS(NS,t),a,k);
 const sum=rs=>rs.reduce((t,r)=>t+(r.mb||0),0),add=a=>a.reduce((t,v)=>t+v,0);
-const gb=mb=>mb==null?"not measured":mb>=1024?(mb/1024).toFixed(1)+" GB":Math.round(mb)+" MB";
+/* pure:start -- nothing between these two marks touches the page; the tests run these lines on their own */
+/* A size: MB below 1,000 MB, GB (one decimal) from there up, so it never reads "1021 MB". */
+const gb=mb=>mb==null?"not measured":Math.round(mb)>=1000?(mb/1024).toFixed(1)+" GB":Math.round(mb)+" MB";
+/* A size written beside another one takes the other's unit when that still reads cleanly (0.1 GB or more). */
+const gbLike=(mb,ref)=>mb!=null&&ref!=null&&Math.round(ref)>=1000&&Math.round(mb)<1000&&Math.round(mb)>=100?(mb/1024).toFixed(1)+" GB":gb(mb);
+/* A signed change beside its total: "+1.0 GB", "\u22120.6 GB", "+30 MB"; nothing when it is under 1 MB. */
+const chg=(d,total)=>Math.abs(d)<1?"":(d>0?"+":"\u2212")+gbLike(Math.abs(d),total);
+/* Labels for the magnified strip, from measured widths in px: each run's own width, and the width of its
+   full label ("Finished 9.6 GB") and its short one ("Finished"). Every run gets a label. They sit on the
+   runs when every one fits; if even one does not, all of them move to a keyed list above the strip. */
+function labelPlan(runs){
+ const pad=12;
+ if(runs.every(r=>r.short<=r.w-pad))return{mode:"direct",labels:runs.map(r=>({k:r.k,form:r.full<=r.w-pad?"full":"short"}))};
+ return{mode:"list",labels:runs.map(r=>({k:r.k,form:"full"}))};}
+/* pure:end */
 const ago=d=>d==null?"no date":d<1?"today":d<2?"1 day ago":Math.round(d)+" days ago";
 const nc=n=>n+(n===1?" copy":" copies");
 const held=rs=>rs.some(r=>r.mb!=null)?gb(sum(rs)):"not measured";
@@ -2383,10 +2399,15 @@ function drawScale(){
  box.replaceChildren(...kids);
  marks(nodes,i=>tips[i](),i=>acts[i]());
  const mr=mag.getBoundingClientRect();
+ const runs=[];
  GK.forEach(k=>{if(!first[k])return;const a=first[k].getBoundingClientRect(),b=last[k].getBoundingClientRect(),x0=a.left-mr.left,w=b.right-a.left;
-  const sp=h("span",{style:"left:"+x0+"px"},h("b",null,G[GI[k]].s)," "+gb(sum(byG[k])));lab.append(sp);
-  if(sp.offsetWidth>w-12){sp.replaceChildren(h("b",null,G[GI[k]].s));if(sp.offsetWidth>w-12)sp.remove();}
+  const full=h("span",{style:"left:"+x0+"px"},h("b",null,G[GI[k]].s)," "+gb(sum(byG[k]))),short=h("span",{style:"left:"+x0+"px"},h("b",null,G[GI[k]].s));
+  lab.append(full,short);runs.push({k:k,w:w,full:full.offsetWidth,short:short.offsetWidth,nodes:{full:full,short:short}});
   if(k==="done"&&brk){brk.style.left=x0+"px";brk.style.width=Math.max(6,w)+"px";}});
+ const plan=labelPlan(runs);
+ if(plan.mode==="direct")runs.forEach((r,i)=>r.nodes[plan.labels[i].form==="full"?"short":"full"].remove());
+ else{lab.className="legend runlist";lab.removeAttribute("aria-hidden");
+  lab.replaceChildren(...runs.map(r=>h("span",{class:"g-"+r.k},key(r.k),h("b",null,G[GI[r.k]].s),"\u00a0"+gb(sum(byG[r.k])))));}
  if(wsvg){const sr=strip.getBoundingClientRect(),cr=cps.getBoundingClientRect(),x0=cr.left-sr.left,x1=cr.right-sr.left,w=sr.width,H=42;
   wsvg.setAttribute("viewBox","0 0 "+w+" "+H);const[p,l1,l2]=wsvg.children;
   p.setAttribute("points",x0+",0 "+x1+",0 "+w+","+H+" 0,"+H);
@@ -2433,7 +2454,7 @@ function drawTime(){
  const F=P.filter(p=>p.free!=null),L=P[P.length-1];
  if(F.length>=2){const a=F[0],z=F[F.length-1],dl=z.free-a.free,since=(z.t-a.t<3*86400?dayTime:day)(a.t);
   title.textContent=Math.abs(dl)<0.05?"Free space is level since "+since:"Free space is "+(dl<0?"down ":"up ")+Math.abs(dl).toFixed(1)+" GB since "+since;
-  note.textContent=F.length+" scans on record: "+a.free+" GB free at the first, "+z.free+" GB now. Agent copies went from "+gb(add(P[0].mb))+" to "+gb(add(L.mb))+" over the same time. Each dot is one scan; nothing is known between them.";}
+  note.textContent=F.length+" scans on record: "+a.free+" GB free at the first, "+z.free+" GB now. Agent copies went from "+gbLike(add(P[0].mb),add(L.mb))+" to "+gbLike(add(L.mb),add(P[0].mb))+" over the same time. Each dot is one scan; nothing is known between them.";}
  else{title.textContent=F.length?"Free space: "+F[0].free+" GB at this scan":"Free space at each scan";
   note.textContent="This is the first scan on record with these settings. Each later scan adds a dot, so a trend shows from the second scan on.";}
  box.replaceChildren();
@@ -2466,7 +2487,7 @@ function drawTime(){
   const sa=sizeAxis(Math.max(1,...M.flatMap(p=>p.mb)),2);mults.replaceChildren();
   G.forEach((g,gi)=>{
    const cell=h("div",{class:"mult g-"+g.k}),pb=h("div",null),lastv=M[M.length-1].mb[gi],dl=lastv-M[0].mb[gi];
-   cell.append(h("div",{class:"mtitle"},h("span",null,key(g.k),g.s),h("span",null,h("b",null,gb(lastv)),Math.abs(dl)>=1?" ("+(dl>0?"+":"\u2212")+gb(Math.abs(dl))+")":"")),pb);mults.append(cell);
+   cell.append(h("div",{class:"mtitle"},h("span",null,key(g.k),g.s),h("span",null,h("b",null,gb(lastv)),chg(dl,lastv)&&" ("+chg(dl,lastv)+")")),pb);mults.append(cell);
    const c=linePlot(pb,M,{h:86,mt:8,mb:6,pl:5,pr:8,top:sa.top,val:p=>p.mb[gi],cls:" g-"+g.k,label:g.s+": space at each scan. Left and right arrow keys step through the scans.",
     tip:p=>[h("div",{class:"tt"},dayTime(p.t)),h("div",null,key(g.k),h("b",null,gb(p.mb[gi]))," "+g.s+" \u00b7 "+nc(p.n[gi]))]});
    const v=c.svg,base=c.ys(0),pts=M.map(p=>c.xs(p.t)+","+c.ys(p.mb[gi]));
@@ -2611,7 +2632,8 @@ def script_json(obj):
 
 
 def _fmt_mb(mb):
-    return f'{mb / 1024:.1f} GB' if mb >= 1024 else f'{mb:.0f} MB'
+    """MB below 1,000 MB, GB from there up (the page's script formats sizes the same way)."""
+    return f'{mb / 1024:.1f} GB' if round(mb) >= 1000 else f'{mb:.0f} MB'
 
 
 def _copies(n):
