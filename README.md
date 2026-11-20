@@ -17,6 +17,10 @@ exercised there.
   <img alt="The report page: 16 finished copies can come off this disk, up to 9.6 GB. Below it the disk is drawn to scale and the agent copies are magnified so each copy is one block, colored by group, followed by free space at each past scan." src="docs/img/report-desktop-light.png">
 </picture>
 
+**[Open the live demo](https://btcelectrician.github.io/agent-copy-sort/)** and
+try it: hover a block, tap a dot on the chart, filter the tables. Every name
+and number in it is invented.
+
 Every scan writes this page. It answers one question first: what can I
 safely remove, and how much space do I get back? Then it shows the disk drawn
 to scale with the agent copies magnified (each block is one copy), free
@@ -27,6 +31,8 @@ which projects pile up copies, and every copy in a table you can filter.
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/report-detail-dark.png">
   <img alt="Further down the page: a ranked bar chart of what holds the your-call copies, copies by project split by group, and a scatter of size against age." src="docs/img/report-detail-light.png">
 </picture>
+
+![A short tour of the page: pointing at a block, a scan, a reason and a copy shows its details, then the table of every copy.](docs/img/report-tour.gif)
 
 It is one self-contained file. It loads no fonts, scripts or images from
 anywhere and makes no network requests. It works in light and dark, on a
@@ -44,6 +50,10 @@ yourself, without scanning anything:
 ```bash
 python3 demo/render_demo.py --redact
 ```
+
+The live demo is that same page with one line added at the top
+(`docs/index.html`, rebuilt with `python3 demo/render_demo.py --site`; a test
+fails if it falls behind the tool).
 
 Two things the page is careful about. Sizes are folder sizes, not exact
 reclaimable bytes: copies of one project can share storage, so the page says
@@ -191,6 +201,7 @@ temp folder with its own `HOME`; nothing outside it is scanned or removed.
 | `tests/` | Tests, run on macOS and Linux in CI |
 | `demo/` | An invented scan and a script that renders the report page from it |
 | `docs/img/` | The pictures in this README, made from the demo page |
+| `docs/index.html` | The live demo page |
 | `.github/workflows/test.yml` | CI: tests on both platforms and a check against the Agent Skills spec |
 
 ## License
