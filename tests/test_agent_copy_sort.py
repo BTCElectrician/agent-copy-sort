@@ -1564,5 +1564,28 @@ class ScanHistoryTest(Base):
         self.assertEqual(meta['histState'], 'off')
 
 
+class ReadmeTest(unittest.TestCase):
+    def test_readme_pictures_exist_and_none_are_left_over(self):
+        root = Path(__file__).parents[1]
+        used = set(re.findall(r'docs/img/[\w.-]+', (root / 'README.md').read_text()))
+        self.assertTrue(used)
+        for rel in sorted(used):
+            self.assertTrue((root / rel).is_file(), f'README shows {rel}, which is missing')
+        have = {f'docs/img/{p.name}' for p in (root / 'docs' / 'img').iterdir()}
+        self.assertEqual(have, used, 'docs/img holds a picture the README does not show')
+
+    def test_readme_quotes_messages_the_tool_really_prints(self):
+        readme = (Path(__file__).parents[1] / 'README.md').read_text()
+        script = SCRIPT.read_text()
+        for message in ('GitHub CLI (gh) not available; pull requests were not checked.',
+                        'Running programs could not be fully checked',
+                        'Not fully checked before the time limit; run the scan again.',
+                        'can be read by other users'):
+            self.assertIn(message, readme)
+            self.assertIn(message, script)
+        for option in re.findall(r'^\| `(--[a-z-]+)', readme, re.M):
+            self.assertIn(f"'{option}'", script, f'README lists {option}, which the tool does not have')
+
+
 if __name__ == '__main__':
     unittest.main()
