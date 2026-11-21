@@ -258,8 +258,16 @@ local-only. The short version:
 | `--confirm` | Actually act. Without it, a dry run. |
 | `--time-limit S` | A best-effort time budget in seconds. Default 600. |
 | `--no-github` | Skip pull-request lookups. |
+| `--temp-root <folder>` | A temp folder whose clones count as copies. Repeatable. If `scan` was given one, give `remove` the same one. |
+| `--recent-days N` | How many days count as "recently active". Default 4, or the plan's value when that is larger. |
+| `--root <folder>` | An extra folder that holds original repositories. Repeatable. The ones named at scan time are kept as well. |
 | `--allow-caches` | Rebuildable caches do not block removal. The plan must have been scanned with it too. |
 | `--accept-unreadable NAME` | Linux only, as for `scan`. |
+
+`remove` takes its settings from this computer and its own command line,
+never from the plan file. A plan is only the list of copies to check again, so
+editing one cannot move the folders it protects or relabel a project as a
+copy. A plan made under a different home folder is refused: scan again.
 
 ## Troubleshooting
 
@@ -271,6 +279,9 @@ local-only. The short version:
 | `Not fully checked before the time limit; run the scan again.` | The time budget ran out before every copy was checked. | Scan again with a larger `--time-limit`. |
 | `Refusing: ... can be read by other users` | The output folder is not private. | Use a new folder, or let it use the default. |
 | `remove` refuses a copy you approved | Something changed since the scan: a new file, a new commit, a program working there, or the remote no longer has the work. | Scan again and look at the new reason. |
+| `remove` says `this command does not place it in an agent or temp folder` | The scan was given `--temp-root` and `remove` was not. | Give `remove` the same `--temp-root`. |
+| A copy is in "your call" with `git could not read part of this copy` | Git has no permission to list a folder inside it, so nothing proves that folder is empty. | Fix the folder's permissions, or look inside it yourself, then scan again. |
+| A copy is in "your call" with `a git repository is inside it` | A cache folder such as `node_modules` or `.venv` holds another git project, whose commits may exist nowhere else. `--allow-caches` never removes that. | Push or move that project, or delete it yourself, then scan again. |
 
 ## FAQ
 

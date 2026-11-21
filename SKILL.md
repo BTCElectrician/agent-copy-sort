@@ -73,7 +73,9 @@ a folder are exempt. A cache folder still blocks if it holds a tracked file
 (compared ignoring letter case), a `.env`/`.env.*` file or a database or key
 file (`*.db`, `*.sqlite`, `*.sqlite3`, `*.pem`, `*.key`, `*.p12`), whether as
 a file or a symlink, a symlink pointing outside the copy or at such a file, a
-socket, pipe or device, or a folder that cannot be listed. One tool-defined
+socket, pipe or device, a git repository anywhere inside it (an editable
+install under `.venv/src`, a package cloned into `node_modules`, a bare
+repository), or a folder that cannot be listed. One tool-defined
 exception: a virtual environment's `bin/python*` links, and only when they
 point at an executable file. Any other ignored file, at the top level or
 elsewhere, still blocks. The page and plan record that the flag was used and
@@ -157,6 +159,13 @@ Never delete anything without the user's explicit yes on the exact list.
 python3 <this-skill>/scripts/agent_copy_sort.py remove --plan <scan-file> --ids <id> <id> ...
 python3 <this-skill>/scripts/agent_copy_sort.py remove --plan <scan-file> --ids <id> <id> ... --confirm
 ```
+
+`remove` takes its settings from this computer and its own command line,
+never from the plan file. If the scan was given `--temp-root`, or a
+`--recent-days` below 4, give `remove` the same option; without it, clones
+under that temp folder are refused as original projects and copies newer than
+4 days are refused as recent. A plan made under a different home folder is
+refused: scan again.
 
 The first run is a dry run. `--plan` names the exact scan the user approved.
 With `--confirm`, each copy is re-checked on its own right before acting: the
