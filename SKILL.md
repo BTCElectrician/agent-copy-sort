@@ -75,7 +75,8 @@ file (`*.db`, `*.sqlite`, `*.sqlite3`, `*.pem`, `*.key`, `*.p12`), whether as
 a file or a symlink, a symlink pointing outside the copy or at such a file, a
 socket, pipe or device, a git repository anywhere inside it (an editable
 install under `.venv/src`, a package cloned into `node_modules`, a bare
-repository), or a folder that cannot be listed. One tool-defined
+repository), a mount point (another disk or folder mounted inside it), a file
+that cannot be read, or a folder that cannot be listed. One tool-defined
 exception: a virtual environment's `bin/python*` links, and only when they
 point at an executable file. Any other ignored file, at the top level or
 elsewhere, still blocks. The page and plan record that the flag was used and
@@ -105,7 +106,12 @@ caches are deleted along with the copy. Ask the user before using it.
   unreadable or a symlink, so its lender is unknown), repository settings that
   run programs, a partial clone or borrowed git objects (alternates), refs that
   point at tag objects, trees or files, an unreadable reflog, unreadable or
-  malformed chat records, or a failed check.
+  malformed chat records, or a failed check. Also: an unfinished rebase,
+  merge, cherry-pick, revert or bisect (git may be holding edits it set aside
+  for it, which are on no branch), a locked worktree, work pushed only to a
+  remote that is another folder on this computer, and any warning git printed
+  while listing files, branches or history (it lists what it can read and
+  only warns about the rest).
 - **Finished**: nothing local-only found and its work is on a remote. That
   remote evidence is the local cache; removal checks the live remote again.
 
@@ -165,7 +171,10 @@ never from the plan file. If the scan was given `--temp-root`, or a
 `--recent-days` below 4, give `remove` the same option; without it, clones
 under that temp folder are refused as original projects and copies newer than
 4 days are refused as recent. A plan made under a different home folder is
-refused: scan again.
+refused: scan again. `remove` also searches this computer again for
+repositories and copies, so a plan trimmed to one copy cannot hide a project
+that depends on it. For a clone it checks that every branch fetched earlier is
+still on the remote; one the remote has dropped may survive only in that clone.
 
 The first run is a dry run. `--plan` names the exact scan the user approved.
 With `--confirm`, each copy is re-checked on its own right before acting: the

@@ -150,6 +150,10 @@ SAFE_ENV = _safe_env()
 # back on, so a file whose size and modified time were kept is still compared.
 GIT_BASE = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
             '-c', 'core.trustctime=true', '-c', 'core.checkStat=default', '-c', 'core.untrackedCache=false',
+            # A repository moved from a Mac or Windows disk can keep core.ignoreCase=true on a disk where
+            # `data.txt` and `DATA.TXT` are different files; git then hides the second one. Names are
+            # always compared exactly here. On a case-insensitive disk that can only add a false alarm.
+            '-c', 'core.ignoreCase=false',
             '-c', 'protocol.ext.allow=never', '-c', 'protocol.allow=never',
             *[x for p in ALLOWED_PROTOCOLS.split(':') for x in ('-c', f'protocol.{p}.allow=always')],
             '-c', 'fetch.recurseSubmodules=false', '--no-optional-locks']
@@ -207,6 +211,11 @@ def git_complaint(res):
         if ln.lower().startswith(('warning:', 'error:', 'fatal:')):
             return ln[:160]
     return ''
+
+
+def _said(res):
+    c = git_complaint(res)
+    return f' (git said: {c})' if c else ''
 
 
 # ----------------------------------------------------------------- paths
@@ -442,6 +451,7 @@ class Config:
         self.source_repos = set(source_repositories(self.roots))
         self.discovery_incomplete = False
         self.copy_paths = set()
+        self.inventory = None
 
     def settings(self):
         return {'home': str(self.home), 'recent_days': self.recent_days,
@@ -679,11 +689,18 @@ def _enumerate(base, depth, match, problems, label):
                 continue
             for e in entries:
                 try:
+                    # Links are followed: these files are only read, and a record kept in a
+                    # synced folder is still a record. A link to nothing is missing evidence.
                     if d < depth:
-                        if e.is_dir(follow_symlinks=False):
+                        if e.is_dir():
                             nxt.append(e.path)
-                    elif match(e.name) and e.is_file(follow_symlinks=False):
-                        nxt.append(e.path)
+                        elif e.is_symlink() and not os.path.exists(e.path):
+                            problems.append(f'{label}: {e.path} is a link to something that is not there.')
+                    elif match(e.name):
+                        if e.is_file():
+                            nxt.append(e.path)
+                        elif e.is_symlink():
+                            problems.append(f'{label}: {e.path} is a link to something that is not a readable file.')
                 except OSError as err:
                     problems.append(f'{label}: {e.path} could not be checked ({err.strerror}).')
         level = nxt
@@ -699,8 +716,10 @@ _CWDS_SEEN = {}
 def _transcript_cwds(f, budget, every=False):
     """Working folders a Claude Code transcript records, in first-seen order.
 
-    Returns (raw values, nonempty). With every=False it stops at the first one
-    (reading past 64 KiB if needed). With every=True it reads the whole file:
+    Returns (raw values, nonempty). With every=False it reads the start (past
+    64 KiB if needed, up to the first folder) and the last 256 KiB, so the folder
+    a chat started in and the one it ended in are both seen; folders it only
+    passed through in between are not. With every=True it reads the whole file:
     a chat that started in the main project and later moved into a copy names
     that copy only further down. One file is read once per size and modified
     time, so the repeated checks during a removal do not re-read it."""
@@ -723,6 +742,14 @@ def _transcript_cwds(f, budget, every=False):
                     seen.add(m.group(1))
                     found.append(m.group(1))
             if found and not every:
+                # An older chat is read at both ends: where it started and where it finished.
+                # (Reading every old chat in full would mean gigabytes on each scan.)
+                if st.st_size > fh.tell():
+                    fh.seek(max(fh.tell(), st.st_size - 262144))
+                    for m in CWD_RE.finditer(fh.read()):
+                        if m.group(1) not in seen:
+                            seen.add(m.group(1))
+                            found.append(m.group(1))
                 break
             tail, size = buf[-4096:], 1 << 20
     _CWDS_SEEN[key] = (found, nonempty)
@@ -740,6 +767,7 @@ def load_owners(cfg):
     owners = []
     home = cfg.home
     probs = cfg.owner_problems
+    nofolder = {}
 
     # Claude desktop app session records (macOS and Linux locations).
     for base in (home / 'Library/Application Support/Claude/claude-code-sessions',
@@ -763,6 +791,8 @@ def load_owners(cfg):
                 title = d.get('title')
                 if title is not None and not isinstance(title, str):
                     raise ValueError('title is not text')
+                if not d.get('worktreePath') and not d.get('cwd'):
+                    nofolder['Claude desktop session'] = nofolder.get('Claude desktop session', 0) + 1
                 for key in ('worktreePath', 'cwd'):
                     v = d.get(key)
                     if v:
@@ -789,7 +819,8 @@ def load_owners(cfg):
             try:
                 last = os.path.getmtime(f)
                 # Every folder is read for a chat recent enough to make a copy "in use" or
-                # "recent"; an older chat cannot, so its first folder (for the label) is enough.
+                # "recent". An older chat cannot, but its folders still tell the search where
+                # repositories are, so it is read at both ends.
                 every = cfg.now - last <= (max(cfg.recent_days, 1.0) + 1.0) * DAY
                 raws, nonempty = _transcript_cwds(f, cfg.budget, every)
                 if not raws:
@@ -827,6 +858,7 @@ def load_owners(cfg):
             try:
                 tid, cwd, title, archived, updated = row
                 if not cwd:
+                    nofolder['Codex thread'] = nofolder.get('Codex thread', 0) + 1
                     continue
                 if not isinstance(cwd, str):
                     raise ValueError('cwd is not text')
@@ -838,6 +870,11 @@ def load_owners(cfg):
                                'archived': _opt_bool(archived, 'archived'), 'last': last, 'id': str(tid)})
             except (ValueError, TypeError) as e:
                 probs.append(f'A Codex thread record could not be used ({e}).')
+    # A record with no working folder cannot be matched to any copy. It is ignored, and said so.
+    for what, n in sorted(nofolder.items()):
+        note = f'{n} {what} record(s) name no working folder and were ignored.'
+        if note not in cfg.warnings:
+            cfg.warnings.append(note)
     return owners
 
 
@@ -857,7 +894,7 @@ def _enumerate_dirs(base, depth, name, problems, label):
                 continue
             for e in entries:
                 try:
-                    if e.is_dir(follow_symlinks=False) and (d < depth or e.name == name):
+                    if e.is_dir() and (d < depth or e.name == name):
                         nxt.append(e.path)
                 except OSError as err:
                     problems.append(f'{label}: {e.path} could not be checked ({err.strerror}).')
@@ -1090,7 +1127,20 @@ PSEUDOREFS = ('ORIG_HEAD', 'FETCH_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVE
               'AUTO_MERGE', 'BISECT_HEAD', 'BISECT_EXPECTED_REV', 'BISECT_START',
               'rebase-merge/orig-head', 'rebase-merge/onto', 'rebase-merge/amend', 'rebase-merge/stopped-sha',
               'rebase-apply/orig-head', 'rebase-apply/onto', 'rebase-apply/abort-safety', 'sequencer/head',
-              'sequencer/abort-safety')
+              'sequencer/abort-safety', 'rebase-merge/autostash', 'rebase-apply/autostash', 'MERGE_AUTOSTASH')
+
+# Markers git leaves in a git folder while an operation is unfinished. Removing the copy then
+# would discard the operation's own state, which is not a commit on any branch: edits set aside
+# by an autostash, an edited rebase todo, a bisect log.
+OPERATION_MARKERS = (('rebase-merge', 'a rebase'), ('rebase-apply', 'a rebase or patch series'),
+                     ('MERGE_HEAD', 'a merge'), ('MERGE_AUTOSTASH', 'a merge'),
+                     ('CHERRY_PICK_HEAD', 'a cherry-pick'), ('REVERT_HEAD', 'a revert'),
+                     ('sequencer', 'a cherry-pick or revert series'),
+                     ('BISECT_LOG', 'a bisect'), ('BISECT_START', 'a bisect'))
+
+
+def operations_in_progress(gitdir):
+    return sorted({what for name, what in OPERATION_MARKERS if os.path.lexists(os.path.join(gitdir, name))})
 
 
 def pseudoref_shas(gitdir):
@@ -1123,7 +1173,7 @@ def object_types(path, names):
     if not names:
         return {}
     r = git(path, 'cat-file', '--batch-check=%(objectname) %(objecttype)', input_text='\n'.join(names) + '\n')
-    if not r.ok:
+    if not r.ok or git_complaint(r):
         return None
     out = {}
     for name, ln in zip(names, r.out.splitlines()):
@@ -1175,7 +1225,7 @@ def count_not_reachable(path, tips, exclude_args=(), exclude_shas=()):
     lines = list(dict.fromkeys(tips)) + ['^' + s for s in dict.fromkeys(exclude_shas)]
     r = git(path, 'rev-list', '--count', '--stdin', *(['--not', *exclude_args] if exclude_args else []),
             input_text='\n'.join(lines) + '\n', timeout=60)
-    if not r.ok or not r.out.strip().isdigit():
+    if not r.ok or git_complaint(r) or not r.out.strip().isdigit():
         return None
     return int(r.out.strip())
 
@@ -1271,6 +1321,42 @@ def _raise(err):
     raise err
 
 
+def parse_mountinfo(text):
+    """Mount points named in Linux's /proc/self/mountinfo (field 5, octal escapes undone)."""
+    out = set()
+    for ln in text.splitlines():
+        parts = ln.split(' ')
+        if len(parts) > 4:
+            out.add(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), parts[4]))
+    return out
+
+
+def linux_mount_points():
+    """Every mount point on Linux, where a bind mount can sit on the same disk as its parent
+    and so cannot be told apart by comparing disks. Empty elsewhere and when it cannot be read."""
+    if not sys.platform.startswith('linux'):
+        return set()
+    try:
+        with open('/proc/self/mountinfo', errors='surrogateescape') as fh:
+            return {real(m) for m in parse_mountinfo(fh.read())}
+    except OSError:
+        return set()
+
+
+def _can_read(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except OSError:
+        return False
+    try:
+        os.read(fd, 1)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def _check_cache(path, root, kind, tracked, budget):
     res = {'ok': False, 'kind': kind, 'bytes': 0, 'why': ''}
     if tracked:
@@ -1278,6 +1364,7 @@ def _check_cache(path, root, kind, tracked, budget):
         return res
     top = real(path)
     base = os.path.join(path, root)
+    mounts = linux_mount_points()
     try:
         for dirpath, dnames, fnames in os.walk(base, followlinks=False, onerror=_raise):
             if budget.expired():
@@ -1318,9 +1405,16 @@ def _check_cache(path, root, kind, tracked, budget):
                         dnames.remove(name)
                     continue
                 if stat.S_ISDIR(st.st_mode):
+                    # Deleting the copy would delete through a mount, into another disk or folder.
+                    if os.path.ismount(full) or real(full) in mounts:
+                        res['why'] = f'{name} is a mount point (another disk or folder is mounted there)'
+                        return res
                     continue
                 if not stat.S_ISREG(st.st_mode):
                     res['why'] = f'{name} is a special file (socket, pipe or device)'
+                    return res
+                if not _can_read(full):
+                    res['why'] = f'{name} cannot be read, so nothing shows it is rebuildable'
                     return res
                 res['bytes'] += st.st_size
     except OSError as e:
@@ -1359,6 +1453,7 @@ def git_facts(path, cfg):
     f['standalone'] = not f['worktree'] and gitdir == real(dotgit)
     # `git worktree lock` leaves a `locked` file in the worktree's own git folder.
     f['locked'] = bool(f['worktree']) and os.path.lexists(os.path.join(gitdir, 'locked'))
+    f['in_progress'] = operations_in_progress(gitdir)
 
     rc = git(path, 'config', '--list', '-z', '--show-scope')
     if not rc.ok:
@@ -1369,8 +1464,17 @@ def git_facts(path, cfg):
     local = [(k, v) for s, k, v in cfg_items if s in ('local', 'worktree', 'command')]
     f['risk_inspect'] = sorted({k for k, _ in local if RISK_INSPECT.match(k)})
     f['risk_remote'] = sorted({k for k, _ in local if RISK_REMOTE.match(k)})
-    f['remotes'] = {k[len('remote.'):-len('.url')]: v for _s, k, v in cfg_items
-                    if k.startswith('remote.') and k.endswith('.url')}
+    # The address vetted is the one git will contact: the first address of the remote, after any
+    # url.*.insteadOf rewrite. (A remote can list several addresses, and the last one is not it.)
+    f['remotes'] = {}
+    for name in sorted({k[len('remote.'):-len('.url')] for _s, k, _v in cfg_items
+                        if k.startswith('remote.') and k.endswith('.url')}):
+        r = git(path, 'ls-remote', '--get-url', '--', name, timeout=10)
+        url = r.out.strip() if r.ok and not git_complaint(r) else ''
+        if not url or '\n' in url:
+            unknown.append('remote address')
+            url = ''
+        f['remotes'][name] = url
     f['slug'] = github_slug(f['remotes'].get('origin'))
     f['gitdir_id'], f['common_id'] = identity(gitdir), identity(common)
     # Unsupported arrangements are refused before any object is inspected:
@@ -1511,7 +1615,7 @@ def git_facts(path, cfg):
         path, 'rev-parse', '-q', '--verify', f"refs/remotes/origin/{f['branch']}").ok
 
     # History that exists only in this copy and would be lost with it.
-    f['private_tips'], f['private_unpublished'] = [], 0
+    f['private_tips'], f['private_unpublished'], f['remote_tips'] = [], 0, []
     if f['worktree'] and not f['foreign_gitdir']:
         tips, logs_ok = reflog_tips(os.path.join(gitdir, 'logs'))
         if not logs_ok:
@@ -1519,8 +1623,8 @@ def git_facts(path, cfg):
         r = git(path, 'for-each-ref', '--format=%(objectname)', 'refs/worktree/', 'refs/bisect/',
                 'refs/rewritten/')
         tips += r.out.split() if r.ok else []
-        if not r.ok:
-            unknown.append('worktree-private refs')
+        if not r.ok or git_complaint(r):
+            unknown.append('worktree-private refs' + _said(r))
         tips += _private_pseudorefs(path, gitdir, unknown)
         if f['head']:
             tips.append(f['head'])
@@ -1537,14 +1641,15 @@ def git_facts(path, cfg):
         f['private_unpublished'] = n
     elif f['standalone']:
         r = git(path, 'for-each-ref', '--format=%(objectname) %(refname)')
-        tips = []
+        tips, rtips = [], []
         if r.ok:
             for ln in r.out.splitlines():
                 sha, _, ref = ln.partition(' ')
-                if not ref.startswith('refs/remotes/'):
-                    tips.append(sha)
-        else:
-            unknown.append('local refs')
+                (rtips if ref.startswith('refs/remotes/') else tips).append(sha)
+        if not r.ok or git_complaint(r):
+            # git lists the refs it can read and only warns about the rest, for example a
+            # branch file that a sync tool renamed.
+            unknown.append('local refs' + _said(r))
         logged, logs_ok = reflog_tips(os.path.join(gitdir, 'logs'), skip_remotes=True)
         tips += logged
         if not logs_ok:
@@ -1560,15 +1665,22 @@ def git_facts(path, cfg):
         if n is None:
             unknown.append('local history')
         f['private_unpublished'] = n
+        # Branches fetched from the remote earlier are not this clone's own work, but if the
+        # remote has since dropped one, this clone may hold its last copy. Checked live before
+        # removal (a scan has only the cached refs, which are the thing in question).
+        rlogged, rlogs_ok = reflog_tips(os.path.join(gitdir, 'logs', 'refs', 'remotes'))
+        f['remote_tips'], rok = existing_commits(path, rtips + rlogged)
+        if not rlogs_ok or not rok:
+            unknown.append('fetched history')
 
     # A repository whose .git folder other worktrees depend on.
     f['dependents'] = []
     if f['standalone']:
         r = git(path, 'worktree', 'list', '--porcelain', '-z', timeout=20)
-        if r.ok:
+        if r.ok and not git_complaint(r):
             f['dependents'] = [e['worktree'] for e in parse_worktree_list(r.out)[1:]]
         else:
-            unknown.append('worktree list')
+            unknown.append('worktree list' + _said(r))
 
     stamps = []
     for x in [path] + [os.path.join(gitdir, n) for n in ('index', 'HEAD', 'logs/HEAD')]:
@@ -1595,8 +1707,8 @@ def _private_pseudorefs(path, gitdir, unknown):
     if not shas:
         return []
     r = git(path, 'for-each-ref', '--format=%(objectname)')
-    if not r.ok:
-        unknown.append('pseudorefs')
+    if not r.ok or git_complaint(r):
+        unknown.append('pseudorefs' + _said(r))
         return shas
     named = set(r.out.split())
     return [s for s in shas if s not in named]
@@ -1679,6 +1791,7 @@ REDACTED_TEXT = {
     'dependents': 'Other working copies depend on its git data.',
     'foreign-gitdir': 'Its git data lives elsewhere (submodule or separate git folder).',
     'locked': 'The worktree is locked.',
+    'operation': 'An unfinished git operation (rebase, merge or similar).',
     'contains': 'Another repository or copy is inside it.',
     'helpers': 'Its settings run external programs, so it was not inspected.',
     'unsupported': 'Unsupported git setup (partial clone or borrowed objects).',
@@ -1738,6 +1851,10 @@ def blockers_for(row, cfg):
     if f.get('locked'):
         out.append(_b('locked', 'This worktree is locked (git worktree lock), so someone is keeping it on '
                                 'purpose; unlock it first if it really is finished.'))
+    if f.get('in_progress'):
+        out.append(_b('operation', f"{' and '.join(f['in_progress'])} is unfinished here. Its saved state, such "
+                                   'as edits git set aside (an autostash), is not a commit on any branch and '
+                                   'would be lost; finish or abort it first.'))
     if row.get('contains'):
         out.append(_b('contains', f"It contains another repository or copy: {row['contains'][0]}."))
     if f.get('risk_inspect'):
@@ -2037,6 +2154,13 @@ def live_remote_check(row, copy_paths):
         return False, 'could not compare with the remote'
     if n:
         return False, f'{n} commit(s) here are not on the remote right now'
+    if not f.get('worktree'):
+        stale = count_not_reachable(path, list(f.get('remote_tips') or []), exclude_shas=present)
+        if stale is None:
+            return False, 'could not compare with the remote'
+        if stale:
+            return False, (f'{stale} commit(s) fetched into this clone earlier are no longer on the remote; '
+                           'this clone may hold the last copy')
     missing_tags = [t for t in f.get('tag_objects') or [] if t not in advertised]
     if missing_tags:
         return False, f'{len(missing_tags)} annotated tag(s) here are not on the remote right now'
@@ -2978,6 +3102,22 @@ def prune_outputs(out, now, keep_days=OUTPUT_KEEP_DAYS):
             continue
 
 
+def machine_inventory(cfg, plan):
+    """The copies and repositories on this computer right now, joined with the plan's.
+
+    A plan lists what one scan saw and is not trusted to be complete: a plan trimmed to one copy
+    must not hide a project that borrows that copy's objects, or a remote that lives inside
+    another copy. Returns (copy paths, common git folders), or None when the search did not
+    finish."""
+    owners = load_owners(cfg)
+    found, _leftovers, commons = discover(cfg, sorted({o['cwd'] for o in owners}))
+    if cfg.discovery_incomplete:
+        return None
+    plan_commons = plan.get('commons') if isinstance(plan.get('commons'), list) else []
+    return (sorted({c['path'] for c in plan['copies']} | set(found)),
+            sorted({real(c) for c in commons} | {real(c) for c in plan_commons if isinstance(c, str)}))
+
+
 def removal_config(args, settings):
     """Settings for a removal: from this computer and this command line, never from the plan.
 
@@ -3091,7 +3231,8 @@ def _after_slow_step(step, row):
 
 
 FINGERPRINT_KEYS = ('head', 'branch', 'changed', 'changed_sample', 'ignored', 'ignored_sample', 'hidden',
-                    'hidden_sample', 'unpushed', 'unpushed_proven', 'locked', 'private_tips', 'private_objects',
+                    'hidden_sample', 'unpushed', 'unpushed_proven', 'locked', 'in_progress', 'private_tips',
+                    'remote_tips', 'private_objects',
                     'tag_objects', 'private_unpublished', 'dependents', 'unknown', 'unsupported', 'alternates',
                     'lfs', 'submodules', 'risk_inspect', 'risk_remote', 'gitdir', 'common', 'foreign_gitdir')
 
@@ -3128,7 +3269,7 @@ def recheck_target(entry, plan, cfg):
         return None, 'the folder at this path was replaced after the scan', ''
     owners = load_owners(cfg)
     procev = process_evidence()
-    plan_paths = [c['path'] for c in plan['copies']]
+    plan_paths, commons = cfg.inventory or ([c['path'] for c in plan['copies']], plan.get('commons') or [])
     cfg.copy_paths = set(plan_paths)
     others = sorted(set(plan_paths) | cfg.main_checkouts)
     # Where a copy sits (agent folder, temp folder, or neither) is decided from this
@@ -3142,7 +3283,7 @@ def recheck_target(entry, plan, cfg):
             return row, f'its git {k} changed after the scan', ''
     if f.get('ok') and not _same_git_identity(f, old):
         return row, 'its git folder was replaced after the scan', ''
-    add_alternate_dependents([row], plan.get('commons') or [])
+    add_alternate_dependents([row], commons)
     if cfg.github and f.get('slug') and f.get('branch'):
         items, complete = pr_for_branch(f['slug'], f['branch'])
         attach_prs(row, items, complete, path)
@@ -3170,10 +3311,10 @@ def final_recheck(entry, row, plan, cfg):
         return 'the folder at this path was replaced while it was being checked'
     owners = load_owners(cfg)
     procev = process_evidence()
-    plan_paths = [c['path'] for c in plan['copies']]
+    plan_paths, commons = cfg.inventory or ([c['path'] for c in plan['copies']], plan.get('commons') or [])
     others = sorted(set(plan_paths) | cfg.main_checkouts)
     row2 = inspect_one(path, row.get('kind', ''), cfg, owners, procev, others, with_size=False)
-    add_alternate_dependents([row2], plan.get('commons') or [])
+    add_alternate_dependents([row2], commons)
     row2['pr'] = row.get('pr')
     finish_row(row2, cfg)
     if not procev.ok or row2['processes']:
@@ -3246,6 +3387,11 @@ def cmd_remove(args):
                 entries = parse_worktree_list(r.out)
                 if entries:
                     cfg.main_checkouts.add(real(entries[0]['worktree']))
+    cfg.inventory = machine_inventory(cfg, plan)
+    if cfg.inventory is None:
+        print('Refusing: the repositories on this computer could not all be listed before the time limit, so '
+              'nothing shows what depends on these copies. Nothing was removed.', file=sys.stderr)
+        return 2
     receipt = {'at': time.strftime('%Y-%m-%d %H:%M:%S %Z'), 'plan': str(plan_path), 'plan_id': plan.get('plan_id'),
                'confirmed': bool(args.confirm), 'allow_caches': bool(args.allow_caches),
                'settings': cfg.settings(),

@@ -1775,6 +1775,208 @@ class BreakItLabTest(Base):
             self.assertIn('saved only on a remote that is another folder', rows[name]['why'])
 
 
+class ReviewFindingsTest(Base):
+    """One test for each finding of an outside review that was confirmed by running it."""
+
+    def lender(self, name, borrower_parent):
+        """A temp clone whose only unpublished commit is kept alive by a project that borrows its objects."""
+        clone = self.clone(self.tmproot / name, 'lender', age=False)
+        self.commit(clone, 'only.txt', 'unique', 'unpublished')
+        borrower_parent.mkdir(parents=True, exist_ok=True)
+        git(borrower_parent, 'clone', '--shared', str(clone), 'borrower')
+        git(clone, 'reset', '--hard', 'origin/main')
+        git(clone, 'reset', '--hard', 'HEAD')  # ORIG_HEAD now names the published tip
+        git(clone, 'reflog', 'expire', '--expire=now', '--all')
+        self.age(clone)
+        return clone, borrower_parent / 'borrower'
+
+    def test_unfinished_rebase_with_set_aside_edits_is_your_call(self):
+        self.commit(self.repo, 'second.txt', 's', 'second')
+        git(self.repo, 'push', 'origin', 'main')
+        wt = self.worktree('rebasing', age=False)
+        (wt / 'a.txt').write_text('unique, uncommitted work')
+        editor = self.base / 'edit-todo'
+        editor.write_text('#!/usr/bin/env python3\nimport pathlib, sys\np = pathlib.Path(sys.argv[1])\n'
+                          'p.write_text(p.read_text().replace("pick ", "edit ", 1))\n')
+        editor.chmod(0o755)
+        subprocess.run(['git', 'rebase', '-i', '--autostash', 'HEAD~1'], cwd=wt, check=True, capture_output=True,  # ubs:ignore -- argv list
+                       env={**GIT_ENV, 'GIT_SEQUENCE_EDITOR': str(editor)})
+        gitdir = Path(git(wt, 'rev-parse', '--absolute-git-dir').stdout.strip())
+        stash = (gitdir / 'rebase-merge' / 'autostash').read_text().strip()
+        self.assertEqual(git(wt, 'status', '--porcelain').stdout, '')  # clean, and HEAD is published
+        self.age(wt)
+        rows = self.scan()
+        self.assertEqual(rows['rebasing']['group'], 'decide', rows['rebasing']['why'])
+        self.assertIn('operation', self.codes(rows['rebasing']))
+        self.assertIn('a rebase is unfinished', rows['rebasing']['why'])
+        self.assertEqual(self.remove(rows['rebasing']['id']).returncode, 1)
+        self.assertTrue((gitdir / 'rebase-merge' / 'autostash').exists())
+        self.assertEqual(git(self.repo, 'cat-file', '-t', stash).stdout.strip(), 'commit')
+
+    def test_file_that_differs_only_in_letter_case_is_seen(self):
+        (self.base / 'CaseProbe').write_text('x')
+        if (self.base / 'caseprobe').exists():
+            self.skipTest('this disk does not tell upper and lower case apart')
+        wt = self.worktree('twins', age=False)
+        git(self.repo, 'config', 'core.ignoreCase', 'true')  # as a repository moved from a Mac keeps it
+        (wt / 'A.TXT').write_text('a different file from the tracked a.txt')
+        self.age(wt)
+        if git(wt, 'status', '--porcelain').stdout.strip():
+            self.skipTest('git here lists the second file even when told to ignore case')
+        rows = self.scan()
+        self.assertEqual(rows['twins']['group'], 'decide', rows['twins']['why'])
+        self.assertIn('dirty', self.codes(rows['twins']))
+        self.assertEqual(self.remove(rows['twins']['id']).returncode, 1)
+        self.assertTrue((wt / 'A.TXT').exists())
+
+    def test_mount_point_inside_a_cache_folder_is_not_a_cache(self):
+        wt = self.worktree('mounted', age=False)
+        pkg = wt / 'node_modules' / 'local-package'
+        pkg.mkdir(parents=True)
+        (pkg / 'valuable.txt').write_text('lives on another disk')
+        check = lambda: acs._check_cache(str(wt), 'node_modules', 'node_modules', False, acs.Budget(60))  # noqa: E731
+        self.assertTrue(check()['ok'])
+        real_ismount = os.path.ismount
+        with mock.patch.object(os.path, 'ismount', lambda p: str(p) == str(pkg) or real_ismount(p)):
+            res = check()
+        self.assertFalse(res['ok'])
+        self.assertIn('mount point', res['why'])
+        # A Linux bind mount sits on the same disk as its parent; only the mount table shows it.
+        with mock.patch.object(acs, 'linux_mount_points', lambda: {str(pkg)}):
+            res = check()
+        self.assertFalse(res['ok'])
+        self.assertIn('mount point', res['why'])
+        table = ('36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw\n'
+                 '40 35 0:30 / /home/a\\040b/x rw - tmpfs tmpfs rw\n')
+        self.assertEqual(acs.parse_mountinfo(table), {'/mnt2', '/home/a b/x'})
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root can read every file')
+    def test_unreadable_file_inside_a_cache_folder_blocks(self):
+        (self.repo / '.git' / 'info' / 'exclude').write_text('node_modules/\n')
+        wt = self.worktree('sealed', age=False)
+        state = wt / 'node_modules' / 'service' / 'state'
+        state.parent.mkdir(parents=True)
+        state.write_text('unique results')
+        os.chmod(state, 0)
+        self.addCleanup(os.chmod, state, 0o600)
+        self.age(wt)
+        rows = self.scan('--allow-caches')
+        self.assertEqual(rows['sealed']['group'], 'decide', rows['sealed']['why'])
+        self.assertIn('cannot be read', rows['sealed']['why'])
+        self.assertEqual(self.remove(rows['sealed']['id'], extra=('--allow-caches',)).returncode, 1)
+        self.assertTrue(state.exists())
+
+    def test_trimmed_plan_cannot_hide_a_project_that_borrows_from_the_copy(self):
+        clone, borrower = self.lender('lend', self.home / 'Desktop')
+        rows = self.scan()
+        self.assertIn('dependents', self.codes(rows['lender']))
+        plan = json.loads(self.plan.read_text())
+        plan['copies'] = [c for c in plan['copies'] if c['path'] == str(clone)]
+        plan['commons'] = []
+        trimmed = self.out / 'scan-trimmed.json'
+        trimmed.write_text(json.dumps(plan))
+        os.chmod(trimmed, 0o600)
+        res = self.remove(rows['lender']['id'], plan=trimmed)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("use this repository's git data", res.stdout)
+        self.assertTrue(clone.exists())
+        self.assertEqual(git(borrower, 'show', 'HEAD:only.txt').stdout, 'unique')
+
+    def test_borrower_named_only_at_the_end_of_an_old_chat_is_found(self):
+        clone, borrower = self.lender('lend2', self.home / 'misc')  # outside every search folder
+        d = self.home / '.claude' / 'projects' / '-proj'
+        d.mkdir(parents=True)
+        lines = [json.dumps({'cwd': str(self.repo)}), json.dumps({'message': 'x' * 70000}),
+                 json.dumps({'cwd': str(borrower)})]
+        (d / 'chat.jsonl').write_text('\n'.join(lines) + '\n')
+        old = time.time() - 10 * 86400
+        os.utime(d / 'chat.jsonl', (old, old))
+        rows = self.scan()
+        self.assertEqual(rows['lender']['group'], 'decide', rows['lender']['why'])
+        self.assertIn('dependents', self.codes(rows['lender']))
+        self.assertEqual(self.remove(rows['lender']['id']).returncode, 1)
+        self.assertEqual(git(borrower, 'show', 'HEAD:only.txt').stdout, 'unique')
+
+    def test_the_address_git_really_asks_is_the_one_vetted(self):
+        two = self.clone(self.tmproot / 'two', 'two-addresses', age=False)
+        rewritten = self.clone(self.tmproot / 'rw', 'rewritten', age=False)
+        for clone in (two, rewritten):
+            self.commit(clone, 'only.txt', 'unpublished')
+            inside = clone / '.git' / 'offline.git'
+            git(clone, 'clone', '--bare', str(clone), str(inside))
+            if clone is two:  # git asks the first address; the last one is the real remote
+                git(clone, 'remote', 'set-url', 'origin', str(inside))
+                git(clone, 'remote', 'set-url', '--add', 'origin', str(self.remote))
+            else:             # the configured address is the real remote, but git rewrites it
+                git(clone, 'config', f'url.{inside}.insteadOf', str(self.remote))
+            git(clone, 'fetch', 'origin')
+            self.age(clone)
+        rows = self.scan()
+        for name, clone in (('two-addresses', two), ('rewritten', rewritten)):
+            self.assertEqual(rows[name]['group'], 'decide', rows[name]['why'])
+            self.assertIn('local-remote', self.codes(rows[name]))
+            self.assertEqual(self.remove(rows[name]['id']).returncode, 1)
+            self.assertTrue(clone.exists())
+
+    def test_fetched_branch_the_remote_dropped_blocks_removal(self):
+        clone = self.clone(self.tmproot / 'f', 'fetched', age=False)
+        git(self.repo, 'checkout', '-b', 'temporary')
+        self.commit(self.repo, 'only.txt', 'later deleted from the server', 'temporary')
+        git(self.repo, 'push', 'origin', 'temporary')
+        git(clone, 'fetch', 'origin', 'temporary:refs/remotes/origin/temporary')
+        git(self.repo, 'checkout', 'main')
+        git(self.repo, 'push', 'origin', '--delete', 'temporary')
+        self.age(clone)
+        rows = self.scan()
+        self.assertEqual(rows['fetched']['group'], 'done')  # the cached refs are the thing in question
+        res = self.remove(rows['fetched']['id'])
+        self.assertEqual(res.returncode, 1, res.stdout)
+        self.assertIn('no longer on the remote', res.stdout)
+        self.assertEqual(git(clone, 'show', 'refs/remotes/origin/temporary:only.txt').stdout,
+                         'later deleted from the server')
+
+    def test_ref_git_skips_with_only_a_warning_is_uncertainty(self):
+        clone = self.clone(self.tmproot / 'b', 'renamed-ref', age=False)
+        git(clone, 'checkout', '-b', 'unfinished')
+        self.commit(clone, 'only.txt', 'unique unfinished work')
+        git(clone, 'checkout', 'main')
+        git(clone, 'reflog', 'expire', '--expire=now', '--all')
+        heads = clone / '.git' / 'refs' / 'heads'
+        os.rename(heads / 'unfinished', heads / 'unfinished (conflicted copy)')  # what a sync tool does
+        self.age(clone)
+        rows = self.scan()
+        self.assertEqual(rows['renamed-ref']['group'], 'decide', rows['renamed-ref']['why'])
+        self.assertIn('unknown', self.codes(rows['renamed-ref']))
+        self.assertIn('broken name', rows['renamed-ref']['why'])
+        self.assertEqual(self.remove(rows['renamed-ref']['id']).returncode, 1)
+        self.assertTrue(clone.exists())
+
+    def test_linked_chat_record_is_read_and_a_dead_link_is_uncertainty(self):
+        wt = self.worktree('linked')
+        synced = self.base / 'synced'
+        synced.mkdir()
+        (synced / 'chat.jsonl').write_text(json.dumps({'cwd': str(wt)}) + '\n')
+        d = self.home / '.claude' / 'projects' / '-proj'
+        d.mkdir(parents=True)
+        os.symlink(synced / 'chat.jsonl', d / 'chat.jsonl')
+        rows = self.scan()
+        self.assertEqual(rows['linked']['group'], 'recent', rows['linked']['why'])
+        os.unlink(d / 'chat.jsonl')
+        os.symlink(self.base / 'nowhere.jsonl', d / 'gone.jsonl')
+        rows = self.scan()
+        self.assertIn('owners-incomplete', self.codes(rows['linked']))
+
+    def test_record_that_names_no_folder_is_a_warning_not_a_block(self):
+        self.worktree('nofolder')
+        d = self.home / 'Library/Application Support/Claude/claude-code-sessions/a/b'
+        d.mkdir(parents=True)
+        (d / 'local_x.json').write_text(json.dumps({'sessionId': 'x', 'title': 't', 'isArchived': False,
+                                                    'lastActivityAt': int(time.time() * 1000)}))
+        rows = self.scan()
+        self.assertEqual(rows['nofolder']['group'], 'done', rows['nofolder']['why'])
+        self.assertTrue(any('name no working folder' in w for w in self.report['warnings']), self.report['warnings'])
+
+
 class ReadmeTest(unittest.TestCase):
     def test_readme_pictures_exist_and_none_are_left_over(self):
         root = Path(__file__).parents[1]
