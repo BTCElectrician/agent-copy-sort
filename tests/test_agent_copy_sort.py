@@ -1820,9 +1820,11 @@ class ReviewFindingsTest(Base):
         wt = self.worktree('twins', age=False)
         git(self.repo, 'config', 'core.ignoreCase', 'true')  # as a repository moved from a Mac keeps it
         (wt / 'A.TXT').write_text('a different file from the tracked a.txt')
-        self.age(wt)
-        if git(wt, 'status', '--porcelain').stdout.strip():
+        plain = subprocess.run(['git', '--no-optional-locks', 'status', '--porcelain'], cwd=wt, env=GIT_ENV,  # ubs:ignore -- argv list
+                               capture_output=True, text=True, check=True).stdout
+        if plain.strip():
             self.skipTest('git here lists the second file even when told to ignore case')
+        self.age(wt)  # after the check above, which must not make the copy look recently used
         rows = self.scan()
         self.assertEqual(rows['twins']['group'], 'decide', rows['twins']['why'])
         self.assertIn('dirty', self.codes(rows['twins']))
