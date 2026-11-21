@@ -281,6 +281,9 @@ copy. A plan made under a different home folder is refused: scan again.
 | `remove` refuses a copy you approved | Something changed since the scan: a new file, a new commit, a program working there, or the remote no longer has the work. | Scan again and look at the new reason. |
 | `remove` says `this command does not place it in an agent or temp folder` | The scan was given `--temp-root` and `remove` was not. | Give `remove` the same `--temp-root`. |
 | A copy is in "your call" with `git could not read part of this copy` | Git has no permission to list a folder inside it, so nothing proves that folder is empty. | Fix the folder's permissions, or look inside it yourself, then scan again. |
+| A copy is in "your call" with `is unfinished here` | A rebase, merge, cherry-pick, revert or bisect was left unfinished in it. Git may be holding edits it set aside for it, which are on no branch. | Finish or abort the operation in that copy, then scan again. |
+| `remove` refuses a clone with `no longer on the remote` | A branch that clone fetched earlier has since been deleted on the remote, so the clone may hold its last copy. | Push that branch somewhere, or delete the stale reference yourself, then scan again. |
+| A copy is in "your call" with `git said: warning` | Git listed what it could read and warned about the rest, for example a branch file that a sync tool renamed. | Fix what the warning names, then scan again. |
 | A copy is in "your call" with `a git repository is inside it` | A cache folder such as `node_modules` or `.venv` holds another git project, whose commits may exist nowhere else. `--allow-caches` never removes that. | Push or move that project, or delete it yourself, then scan again. |
 
 ## FAQ
