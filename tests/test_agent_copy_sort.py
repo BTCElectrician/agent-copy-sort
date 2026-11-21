@@ -131,7 +131,8 @@ class Base(unittest.TestCase):
             cmd += ['--home', str(self.home), '--temp-root', str(self.tmproot), '--out', str(out or self.out),
                     '--no-github', '--time-limit', '120', *extra]
         elif args[0] == 'remove':
-            cmd += ['--no-github', '--trash-dir', str(self.trash), *extra]
+            # Removal takes its settings from the machine and its own command line, never from the plan.
+            cmd += ['--no-github', '--trash-dir', str(self.trash), '--temp-root', str(self.tmproot), *extra]
         return subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=self.env)  # ubs:ignore - argument list, no shell, test-built args
 
     def latest_plan(self, out=None):
@@ -155,7 +156,7 @@ class Base(unittest.TestCase):
 
     def remove_inprocess(self, *ids, plan=None, extra=()):
         argv = ['remove', '--plan', str(plan or self.plan), '--ids', *ids, '--confirm', '--no-github',
-                '--trash-dir', str(self.trash), *extra]
+                '--trash-dir', str(self.trash), '--home', str(self.home), '--temp-root', str(self.tmproot), *extra]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             rc = acs.main(argv)
@@ -1579,6 +1580,199 @@ class ScanHistoryTest(Base):
         self.assertIn('scan history was not saved', res.stderr)
         _, meta = page_data(next(self.out.glob('report-*.html')).read_text(), 'META')
         self.assertEqual(meta['histState'], 'off')
+
+
+class BreakItLabTest(Base):
+    """One test for each hole a break-it lab found by rigging throwaway copies with traps."""
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / '.git' / 'info' / 'exclude').write_text('node_modules/\n.venv/\nbuild/\n')
+
+    def nested_repo(self, path, rel):
+        sub = path / rel
+        sub.mkdir(parents=True)
+        git(sub, 'init')
+        (sub / 'patch.js').write_text('// exists only here\n')
+        git(sub, 'add', '.')
+        git(sub, 'commit', '-m', 'local work')
+        return sub / 'patch.js'
+
+    def test_repository_inside_a_cache_folder_is_not_a_cache(self):
+        node = self.worktree('k-node', age=False)
+        (node / 'node_modules' / 'left-pad').mkdir(parents=True)
+        (node / 'node_modules' / 'left-pad' / 'index.js').write_text('x')
+        venv = self.worktree('k-venv', age=False)
+        (venv / '.venv').mkdir()
+        (venv / '.venv' / 'pyvenv.cfg').write_text('home = /usr')
+        bare = self.worktree('k-bare', age=False)
+        (bare / 'node_modules').mkdir()
+        git(bare / 'node_modules', 'init', '--bare', 'kept.git')
+        keep = [self.nested_repo(node, 'node_modules/mylib'), self.nested_repo(venv, '.venv/src/mylib'),
+                bare / 'node_modules' / 'kept.git' / 'HEAD']
+        for p in (node, venv, bare):
+            self.age(p)
+        rows = self.scan('--allow-caches')
+        for name in ('k-node', 'k-venv', 'k-bare'):
+            self.assertEqual(rows[name]['group'], 'decide', rows[name]['why'])
+            self.assertIn('a git repository is inside it', rows[name]['why'])
+            self.assertEqual(rows[name]['git']['caches'], [])
+            res = self.remove(rows[name]['id'], extra=('--allow-caches',))
+            self.assertEqual(res.returncode, 1, res.stdout)
+        for p in keep:
+            self.assertTrue(p.exists(), p)
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root can list every folder')
+    def test_folder_git_cannot_read_is_your_call(self):
+        wt = self.worktree('unread-wt', age=False)
+        clone = self.clone(self.tmproot / 'u', 'unread-clone', age=False)
+        for p in (wt, clone):
+            d = p / 'private-notes'
+            d.mkdir()
+            (d / 'plan.md').write_text('real work')
+            os.chmod(d, 0)
+            self.addCleanup(os.chmod, d, 0o700)
+            self.age(p)
+        rows = self.scan()
+        for name in ('unread-wt', 'unread-clone'):
+            self.assertEqual(rows[name]['group'], 'decide', rows[name]['why'])
+            self.assertIn('unknown', self.codes(rows[name]))
+            self.assertIn('git could not read part of this copy', rows[name]['why'])
+            res = self.remove(rows[name]['id'])
+            self.assertEqual(res.returncode, 1, res.stdout)
+        for p in (wt, clone):
+            os.chmod(p / 'private-notes', 0o700)
+            self.assertEqual((p / 'private-notes' / 'plan.md').read_text(), 'real work')
+            self.assertTrue((p / '.git').exists())  # not left half removed
+
+    def test_chat_that_moved_into_a_copy_counts_for_that_copy(self):
+        wt = self.worktree('moved')
+        d = self.home / '.claude' / 'projects' / '-proj'
+        d.mkdir(parents=True)
+        lines = [json.dumps({'type': 'user', 'cwd': str(self.repo)})]
+        lines += [json.dumps({'type': 'assistant', 'cwd': str(wt)})] * 3
+        (d / 's1.jsonl').write_text('\n'.join(lines) + '\n')
+        rows = self.scan()
+        self.assertEqual(rows['moved']['group'], 'recent', rows['moved']['why'])
+        res = self.remove(rows['moved']['id'])
+        self.assertEqual(res.returncode, 1, res.stdout)
+        self.assertTrue(wt.exists())
+        # An old chat cannot make a copy recent, so only its first folder is read.
+        old = time.time() - 30 * 86400
+        os.utime(d / 's1.jsonl', (old, old))
+        self.assertEqual(self.scan()['moved']['group'], 'done')
+
+    def forged_entry(self, path, kind):
+        st, gst = os.lstat(path), os.lstat(path / '.git')
+        ident = lambda s: {'dev': s.st_dev, 'ino': s.st_ino, 'dir': True, 'link': False}  # noqa: E731
+        return {'id': acs.copy_id(str(path)), 'path': str(path), 'name': path.name, 'kind': kind, 'group': 'done',
+                'identity': ident(st),
+                'git': {'gitdir': str(path / '.git'), 'common': str(path / '.git'), 'head': head(path),
+                        'gitdir_id': ident(gst), 'common_id': ident(gst)}}
+
+    def write_plan(self, plan, name):
+        path = self.out / name
+        path.write_text(json.dumps(plan))
+        os.chmod(path, 0o600)
+        return path
+
+    def test_plan_cannot_supply_settings_or_labels(self):
+        self.worktree('okay')
+        # Two originals, clean and pushed: one under a usual project folder, one somewhere else.
+        desk = self.clone(self.home / 'Desktop', 'original')
+        work = self.clone(self.home / 'work', 'elsewhere')
+        self.scan()
+        base = json.loads(self.plan.read_text())
+
+        plan = json.loads(json.dumps(base))
+        plan['copies'] += [self.forged_entry(desk, 'Claude Code'), self.forged_entry(work, 'Temp folder')]
+        plan['settings']['temp_roots'].append(str(self.home / 'work'))
+        plan['settings']['recent_days'] = 0
+        labels = self.write_plan(plan, 'scan-forged-labels.json')
+        for path, said in ((desk, 'the original'), (work, 'main checkout')):
+            res = self.remove(acs.copy_id(str(path)), plan=labels)
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn(said, res.stdout)
+            self.assertTrue(path.exists())
+
+        plan = json.loads(json.dumps(base))
+        plan['copies'].append(self.forged_entry(desk, 'Claude Code'))
+        (self.base / 'elsewhere').mkdir()
+        plan['settings'].update(home=str(self.base / 'elsewhere'), roots=[])
+        res = self.remove(acs.copy_id(str(desk)), plan=self.write_plan(plan, 'scan-forged-home.json'))
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn('different home folder', res.stderr)
+        self.assertTrue(desk.exists())
+
+    def test_removal_needs_the_scan_options_repeated(self):
+        extra_tmp = self.base / 'more-tmp'
+        clone = self.clone(extra_tmp, 'far')
+        fresh = self.worktree('fresh', age=False)
+        self.age(fresh, days=1)
+        rows = self.scan('--temp-root', str(extra_tmp), '--recent-days', '0')
+        self.assertEqual((rows['far']['group'], rows['fresh']['group']), ('done', 'done'))
+        res = self.remove(rows['far']['id'], rows['fresh']['id'])
+        self.assertEqual(res.returncode, 1, res.stdout)
+        self.assertIn('give remove the same --temp-root', res.stdout)
+        self.assertIn('Active recently', res.stdout)
+        self.assertTrue(clone.exists() and fresh.exists())
+        res = self.remove(rows['far']['id'], rows['fresh']['id'],
+                          extra=('--temp-root', str(extra_tmp), '--recent-days', '0'))
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse(clone.exists() or fresh.exists())
+
+    def test_same_size_edit_with_its_time_put_back_is_still_seen(self):
+        wt = self.worktree('stat', age=False)
+        old = time.time() - 40 * 86400
+        f = wt / 'data.txt'
+        f.write_text('A' * 40 + '\n')
+        os.utime(f, (old, old))
+        git(wt, 'add', 'data.txt')
+        git(wt, 'commit', '-m', 'data')
+        git(wt, 'push', '-u', 'origin', 'stat')
+        git(wt, 'config', 'core.trustctime', 'false')
+        # git compares change times in whole seconds: an edit in the same second as the commit stays
+        # invisible to it whatever the settings, so the edit here comes a little later, as a real one would.
+        time.sleep(1.2)
+        f.write_text('B' * 40 + '\n')
+        os.utime(f, (old, old))
+        self.age(wt)
+        plain = subprocess.run(['git', '--no-optional-locks', 'status', '--porcelain'], cwd=wt, env=GIT_ENV,  # ubs:ignore -- argv list
+                               capture_output=True, text=True, check=True).stdout
+        if plain.strip():
+            self.skipTest('git sees this edit here even when told not to trust change times')
+        self.age(wt)
+        rows = self.scan()
+        self.assertEqual(rows['stat']['group'], 'decide', rows['stat']['why'])
+        self.assertIn('dirty', self.codes(rows['stat']))
+        self.assertEqual(self.remove(rows['stat']['id']).returncode, 1)
+        self.assertEqual(f.read_text(), 'B' * 40 + '\n')
+
+    def test_locked_worktree_is_your_call(self):
+        wt = self.worktree('kept')
+        git(self.repo, 'worktree', 'lock', '--reason', 'on purpose', str(wt))
+        rows = self.scan()
+        self.assertEqual(rows['kept']['group'], 'decide', rows['kept']['why'])
+        self.assertIn('locked', self.codes(rows['kept']))
+
+    def test_work_saved_only_in_another_folder_is_not_finished(self):
+        wt = self.worktree('peer', age=False)
+        clone = self.clone(self.tmproot / 'p', 'peer-clone', age=False)
+        other = self.base / 'another-folder'
+        other.mkdir()
+        git(other, 'init')
+        for p, branch in ((wt, 'peer'), (clone, 'side')):
+            git(p, 'remote', 'add', 'other', str(other))
+            if branch == 'side':
+                git(p, 'checkout', '-b', 'side')
+            self.commit(p)
+            git(p, 'push', 'other', branch)
+            self.age(p)
+        rows = self.scan()
+        for name in ('peer', 'peer-clone'):
+            self.assertEqual(rows[name]['group'], 'decide', rows[name]['why'])
+            self.assertIn('local-remote', self.codes(rows[name]))
+            self.assertIn('saved only on a remote that is another folder', rows[name]['why'])
 
 
 class ReadmeTest(unittest.TestCase):
